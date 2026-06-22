@@ -81,7 +81,7 @@ class TestCliFunctions(unittest.TestCase):
             validate_timerange(f"{MAX_TIMERANGE_MONTHS * 30 + 1}d") # 3 months + 1 day
         with self.assertRaisesRegex(argparse.ArgumentTypeError, f"TIMERANGE exceeds maximum allowed duration of {MAX_TIMERANGE_MONTHS} months."):
             validate_timerange(f"{MAX_TIMERANGE_MONTHS * 4 + 1}w") # Approx 3 months + 1 week
-        with self.assertRaisesRegex(argparse.ArgumentTypeError, f"{MAX_TIMERANGE_MONTHS+1}m"):
+        with self.assertRaisesRegex(argparse.ArgumentTypeError, f"TIMERANGE exceeds maximum allowed duration of {MAX_TIMERANGE_MONTHS} months."):
             validate_timerange(f"{MAX_TIMERANGE_MONTHS + 1}m")
 
     # --- Test validate_budget ---
