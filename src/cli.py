@@ -1,34 +1,15 @@
 import argparse
 import re
+import json
 from datetime import datetime, timedelta
 
-# Hardcoded list of European airports for validation
-# In a real application, this might come from a configuration file or a database.
-EU_AIRPORTS = {
-    "EIN", "AMS", "LHR", "CDG", "MAD", "FCO", "BER", "DUB", "BRU", "VIE",
-    "LIS", "ATH", "OSL", "CPH", "ARN", "HEL", "PRG", "WAW", "BUD", "BCN",
-    "MXP", "MUC", "ZRH", "GVA", "VLC", "EDI", "GLA", "MAN", "LGW", "STN",
-    "LTN", "DUS", "HAM", "STR", "CGN", "NCL", "BHD", "BFS", "ORK", "SNN",
-    "BLQ", "CTA", "NAP", "PSA", "VCE", "VRN", "SXF", "TXL", "LEJ", "DRS",
-    "NUE", "BRE", "HAJ", "DTM", "FMO", "LUB", "SXB", "NCE", "MRS", "BOD",
-    "LYS", "TLS", "NTE", "RNS", "LIL", "BGY", "TSF", "AGP", "ALC", "PMI",
-    "IBZ", "TFS", "LPA", "FNC", "OPO", "FAO", "KRK", "GDN", "WRO", "POZ",
-    "KSC", "BTS", "KIV", "SOF", "VAR", "BOJ", "OTP", "CLJ", "TSR", "BEG",
-    "ZAG", "SPU", "DBV", "TGD", "SKP", "SJJ", "LJU", "Tirana", "RIX", "VNO",
-    "TLN", "KGD", "GOJ", "MSQ", "KBP", "ODS", "LWO", "HRK", "DNK", "DOK",
-    "ROV", "KZN", "SVX", "UFA", "CEK", "OVB", "KJA", "IKT", "KJA", "VVO",
-    "KGD", "LED", "AER", "ASF", "GRV", "MCX", "OGZ", "PEE", "NJC", "MMK",
-    "KEJ", "OVB", "TJM", "VKO", "DME", "SVO", "GDZ", "ESB", "ADB", "SAW",
-    "AYT", "DLM", "BJV", "ADA", "ASR", "DIY", "ERZ", "GZT", "HTY", "IST",
-    "IZM", "KAY", "KYA", "MLX", "SSX", "TZX", "VAS", "VAN", "BAL", "BTZ",
-    "EZS", "ERC", "KSY", "MZH", "SZF", "USQ", "DNZ", "NAK", "PQM", "GZP",
-    "KCM", "AOE", "YEI", "SFG", "CIL", "KFS", "IGL", "ONQ", "KZR", "LTK",
-    "JED", "DMM", "RUH", "MED", "DXB", "AUH", "SHJ", "DOH", "KWI", "BAH",
-    "MCT", "AMM", "BEY", "DAM", "TLV", "CAI", "HRG", "SSH", "LXR", "ASW",
-    "SSG", "FIH", "CKY", "NBO", "DAR", "ADD", "JNB", "CPT", "MRU", "SEZ",
-    "CMN", "RAK", "AGA", "FEZ", "TNG", "ALG", "ORN", "TUN", "DJE", "MLA",
-    "LCA", "PFO", "TLV", "AMM"
-}
+# Load European airports from JSON file
+try:
+    with open("src/eu_airports.json", "r") as f:
+        EU_AIRPORTS = set(json.load(f))
+except FileNotFoundError:
+    print("Error: eu_airports.json not found. Please ensure it exists in the src/ directory.")
+    EU_AIRPORTS = set() # Fallback to empty set to avoid further errors
 
 MAX_TIMERANGE_MONTHS = 3
 
