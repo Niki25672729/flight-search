@@ -12,9 +12,9 @@ python flight_search.py [DEPARTURE_AIRPORT] [TIMERANGE] [BUDGET]
 
 | Argument | Format | Examples | Default |
 |----------|--------|---------|---------|
-| `DEPARTURE_AIRPORT` | IATA code (EU only) | `EIN`, `AMS`, `LHR` | `EIN` |
-| `TIMERANGE` | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m` | `1m` |
-| `BUDGET` | Integer (euros) | `50`, `100` | `50` |
+| `departure_airport` | IATA code (EU only) | `EIN`, `AMS`, `LHR` | `EIN` |
+| `timerange` | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m` | `1m` |
+| `budget` | Integer (euros) | `50`, `100` | `50` |
 
 Max search range: 3 months.
 
@@ -158,6 +158,8 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 | 3 | 1 week cache TTL | No cache, daily cache | Balance between freshness and avoiding frequent scrapes |
 | 4 | Support 6 airlines | All European budget airlines | Covers majority of European budget routes |
 | 5 | Static lookup table for IATA to city/country mapping | External API | Simpler, no API dependency, EU airports list is finite |
+| 6 | Scraping only, no airline APIs | Ryanair unofficial API | Free tier limits too restrictive for practical use |
+| 7 | Web UI deferred until CLI is fully working | Build UI first | CLI is the top priority; UI is a nice-to-have |
 
 ## External Dependencies
 
@@ -182,7 +184,6 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 - [ ] Web interface: simple HTML page, or a framework like Flask/FastAPI + React?
 - [ ] Should the web UI replace the CLI or run alongside it?
 - [ ] Real-time search in the browser or trigger from CLI and view results in browser?
-- [ ] Should we use official APIs where available instead of scraping? (Ryanair has an unofficial API)
 - [ ] How to handle scraping failures gracefully — skip airline or abort?
 
 ## Supported Airlines

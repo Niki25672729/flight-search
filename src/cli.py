@@ -23,21 +23,21 @@ def validate_departure_airport(airport: str) -> str:
         )
     return airport.upper()
 
-def validate_timerange(timerange: str) -> str:
+def validate_timerange(timerange: str) -> int:
     """
     Validates the time range format (e.g., '3d', '2w', '1m') and ensures it's within 3 months.
     """
     match = re.fullmatch(r"(\d+)([dwm])", timerange)
     if not match:
         raise argparse.ArgumentTypeError(
-            f"Invalid TIMERANGE format: {timerange}. Expected format: <number>[d|w|m] (e.g., 3d, 2w, 1m)."
+            f"Invalid timerange format: {timerange}. Expected format: <number>[d|w|m] (e.g., 3d, 2w, 1m)."
         )
 
     value = int(match.group(1))
     unit = match.group(2)
 
     if value <= 0:
-        raise argparse.ArgumentTypeError("TIMERANGE value must be a positive number.")
+        raise argparse.ArgumentTypeError("Timerange value must be a positive number.")
 
     # Convert to days for comparison
     if unit == 'd':
@@ -50,10 +50,10 @@ def validate_timerange(timerange: str) -> str:
 
     if total_days > MAX_TIMERANGE_MONTHS * 30: # 3 months * 30 days/month
         raise argparse.ArgumentTypeError(
-            f"TIMERANGE exceeds maximum allowed duration of {MAX_TIMERANGE_MONTHS} months."
+            f"Timerange exceeds maximum allowed duration of {MAX_TIMERANGE_MONTHS} months."
         )
 
-    return timerange
+    return total_days
 
 def validate_budget(budget_str: str) -> int:
     """
@@ -63,12 +63,12 @@ def validate_budget(budget_str: str) -> int:
         budget = int(budget_str)
         if budget <= 0:
             raise argparse.ArgumentTypeError(
-                f"Invalid BUDGET: {budget_str}. Must be a positive integer."
+                f"Invalid budget: {budget_str}. Must be a positive integer."
             )
         return budget
     except ValueError:
         raise argparse.ArgumentTypeError(
-            f"Invalid BUDGET format: {budget_str}. Must be an integer."
+            f"Invalid budget format: {budget_str}. Must be an integer."
         )
 
 def parse_arguments() -> argparse.Namespace:
@@ -80,21 +80,21 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
-        "DEPARTURE_AIRPORT",
+        "departure_airport",
         nargs="?", # Makes the argument optional
         default="EIN",
         type=validate_departure_airport,
         help="Departure airport IATA code (EU only). Default: EIN"
     )
     parser.add_argument(
-        "TIMERANGE",
+        "timerange",
         nargs="?", # Makes the argument optional
         default="1m",
         type=validate_timerange,
         help="Time range for the search (e.g., 3d, 2w, 1m). Max: 3 months. Default: 1m"
     )
     parser.add_argument(
-        "BUDGET",
+        "budget",
         nargs="?", # Makes the argument optional
         default="50",
         type=validate_budget,
@@ -105,6 +105,6 @@ def parse_arguments() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_arguments()
-    print(f"Departure Airport: {args.DEPARTURE_AIRPORT}")
-    print(f"Time Range: {args.TIMERANGE}")
-    print(f"Budget: {args.BUDGET}")
+    print(f"Departure Airport: {args.departure_airport}")
+    print(f"Time Range: {args.timerange}")
+    print(f"Budget: {args.budget}")
