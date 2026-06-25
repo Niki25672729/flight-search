@@ -7,7 +7,7 @@ A Python CLI tool that searches for budget flights from a European departure air
 ## CLI Usage
 
 ```bash
-python flight_search.py [DEPARTURE_AIRPORT] [TIMERANGE] [BUDGET]
+python flight_search.py [departure_airport] [timerange] [budget]
 ```
 
 | Argument | Format | Examples | Default |
@@ -26,7 +26,7 @@ Max search range: 3 months.
 - Scrape budget airline websites for flight data
 - Cache results in a local file (1 week TTL, timestamp in filename)
 - Display results as a table: destination (IATA code, city, country), airline, departure time, arrival time, price
-- Web interface to display flight results
+- Web interface to display flight results (deferred)
 
 **Non-Goals**
 - Booking flights
@@ -35,45 +35,25 @@ Max search range: 3 months.
 - Real-time pricing accuracy
 
 ## High-Level Diagram
-┌─────────┐   args    ┌──────────┐   cache hit   ┌───────────┐
-
-│   CLI   │──────────▶│  Cache   │──────────────▶│  Display  │
-
-│         │           │  Manager │               │   Table   │
-
-└─────────┘           └──────────┘               └───────────┘
-
-│ cache miss
-
-▼
-
-┌──────────┐
-
-│ Scraper  │
-
-│          │
-
-└──────────┘
-
-│
-
-┌────────────────┼────────────────┐
-
-▼                ▼                ▼
-
-┌─────────┐     ┌─────────┐     ┌─────────┐
-
-│ Ryanair │     │ easyJet │     │Wizz Air │
-
-└─────────┘     └─────────┘     └─────────┘
-
-▼                ▼                ▼
-
-┌─────────┐     ┌─────────┐
-
-│ Vueling │     │Norwegian│  ... Eurowings
-
-└─────────┘     └─────────┘
+         ┌──────────────────┐   cache hit   ┌───────────────┐
+User────▶│   Entry Point    │──────────────▶│    Display    │
+         └──────────────────┘               └───────────────┘
+                 │
+        ┌────────┴─────────┐
+        ▼                  ▼ cache miss
+  ┌───────────┐      ┌───────────┐
+  │   Cache   │      │  Scraper  │
+  │  Manager  │      │           │
+  └───────────┘      └───────────┘
+                           │
+             ┌─────────────┼─────────────┐
+             ▼             ▼             ▼
+        ┌─────────┐   ┌─────────┐   ┌─────────┐
+        │ Ryanair │   │ easyJet │   │Wizz Air │
+        └─────────┘   └─────────┘   └─────────┘
+        ┌─────────┐   ┌─────────┐   ┌─────────┐
+        │ Vueling │   │Norwegian│   │Eurowings│
+        └─────────┘   └─────────┘   └─────────┘
 
 ## Components
 
@@ -82,8 +62,8 @@ Max search range: 3 months.
 | Field          | Value |
 |----------------|-------|
 | Responsibility | Parse and validate CLI arguments |
-| Inputs         | `DEPARTURE_AIRPORT` (IATA code, EU only), `TIMERANGE` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month), `BUDGET` (euros) |
-| Outputs        | Validated params passed to cache manager |
+| Inputs         | `departure_airport` (IATA code, EU only), `timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month), `budget` (euros) |
+| Outputs        | Validated params passed to `flight_search.py` |
 | Key files      | `cli.py` |
 | External calls | None |
 
@@ -92,17 +72,17 @@ Max search range: 3 months.
 | Field          | Value |
 |----------------|-------|
 | Responsibility | Read/write flight data cache, check TTL |
-| Inputs         | Departure airport, date range |
-| Outputs        | Cached flight list or cache miss signal |
+| Inputs         | Departure airport (IATA code) |
+| Outputs        | List of Flight dicts on cache hit, None on cache miss or expiry |
 | Key files      | `cache.py` |
-| External calls | Local filesystem — cache files named `{airport}_{timestamp}.json` |
+| External calls | Local filesystem — cache files named `{airport}_{YYYYMMDD}.json` |
 
 ### `scraper.py`
 
 | Field          | Value |
 |----------------|-------|
-| Responsibility | Scrape budget airline sites for flights |
-| Inputs         | Departure airport, date range |
+| Responsibility | Scrape budget airline sites for all flights from departure airport for next 3 months + 1 week buffer |
+| Inputs         | Departure airport (IATA code) |
 | Outputs        | List of `{destination, airline, departure_time, arrival_time, price}` |
 | Key files      | `scraper.py` |
 | External calls | Ryanair, easyJet, Wizz Air, Vueling, Norwegian, Eurowings |
@@ -117,7 +97,17 @@ Max search range: 3 months.
 | Key files      | `display.py` |
 | External calls | None |
 
-### `web/` *(planned)*
+### `flight_search.py`
+
+| Field          | Value |
+|----------------|-------|
+| Responsibility | Orchestrate CLI, cache, scraper and display |
+| Inputs         | Validated params from `cli.py` |
+| Outputs        | Filtered flight results passed to `display.py` |
+| Key files      | `flight_search.py` |
+| External calls | `cache.py`, `scraper.py`, `display.py` |
+
+### `web/` *(deferred)*
 
 | Field          | Value |
 |----------------|-------|
@@ -131,11 +121,13 @@ Max search range: 3 months.
 
 1. User runs `python flight_search.py EIN 1m 50`
 2. `cli.py` validates airport (EU only), parses time range, validates budget
-3. `cache.py` checks for a cache file newer than 1 week for this airport
-4. If cache hit → load flights from file
-5. If cache miss → `scraper.py` fetches flights from all supported airlines, saves to cache
-6. Filter flights by budget
-7. `display.py` prints results as table
+3. `flight_search.py` calls `cache.py` with departure airport
+4. If cache hit → load flights from cache file
+5. If cache miss or expired → `flight_search.py` calls `scraper.py` with departure airport
+6. Scraper fetches all flights for next 3 months + 1 week buffer, returns list of Flight dicts
+7. `flight_search.py` calls `cache.py` write method to save scraped results
+8. `flight_search.py` filters flights by time range and budget
+9. `display.py` prints filtered results as table
 
 ## Data Model
 Flight:
@@ -147,7 +139,7 @@ departure_time: datetime
 arrival_time: datetime
 price_eur: float
 
-Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
+Cache file: `{airport}_{YYYYMMDD}.json` — list of Flight objects
 
 ## Key Design Decisions
 
@@ -160,6 +152,9 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 | 5 | Static lookup table for IATA to city/country mapping | External API | Simpler, no API dependency, EU airports list is finite |
 | 6 | Scraping only, no airline APIs | Ryanair unofficial API | Free tier limits too restrictive for practical use |
 | 7 | Web UI deferred until CLI is fully working | Build UI first | CLI is the top priority; UI is a nice-to-have |
+| 8 | Scrape 3 months + 1 week buffer upfront | Scrape per query | Reduces scraping frequency; budget/timerange applied as filters |
+| 9 | `flight_search.py` orchestrates all modules | Merge logic into cache.py | Clear separation of concerns |
+| 10 | Cache filename uses YYYYMMDD only | Full timestamp | Date precision sufficient for 1 week TTL |
 
 ## External Dependencies
 
@@ -178,6 +173,7 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 - Prices may be stale up to 1 week due to caching
 - Airline websites may change their HTML structure and break the scraper
 - Some airlines may require JavaScript rendering (playwright used as fallback)
+- Budget and time range are filter parameters applied after loading from cache, not scrape parameters
 
 ## Open Questions
 
@@ -190,7 +186,7 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 
 | Airline | Website | API available |
 |---------|---------|---------------|
-| Ryanair | ryanair.com | Unofficial API |
+| Ryanair | ryanair.com | Unofficial (not used) |
 | easyJet | easyjet.com | No |
 | Wizz Air | wizzair.com | No |
 | Vueling | vueling.com | No |
@@ -199,17 +195,19 @@ Cache file: `{airport}_{YYYYMMDD_HHMMSS}.json` — list of Flight objects
 
 ## Non-Functional Requirements
 
-| Concern        | Target / Constraint |
-|----------------|---------------------|
-| Latency        | Scraping may take 30-60s per airline |
-| Cache TTL      | 1 week |
+| Concern          | Target / Constraint |
+|------------------|---------------------|
+| Latency          | Scraping may take 30-60s per airline |
+| Cache TTL        | 1 week |
 | Max search range | 3 months |
-| Supported OS   | macOS, Linux |
+| Supported OS     | macOS, Linux |
 
 ## Decision Log (ADR summary)
 
 | ADR | Decision | Status |
 |-----|----------|--------|
 | 001 | Use local JSON cache over database | Accepted |
-| 002 | Scrape airlines directly over paid API | Accepted |
+| 002 | Scrape airlines directly, no paid or unofficial APIs | Accepted |
 | 003 | Support 6 major European budget airlines | Accepted |
+| 004 | `flight_search.py` orchestrates all modules | Accepted |
+| 005 | Scrape 3 months + 1 week buffer, filter at display time | Accepted |
