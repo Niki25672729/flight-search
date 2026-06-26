@@ -2,7 +2,7 @@ import pytest
 import argparse
 from unittest.mock import patch
 
-from src.cli import (
+from cli import (
     validate_departure_airport,
     validate_timerange,
     validate_budget,
