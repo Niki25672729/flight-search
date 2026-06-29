@@ -35,6 +35,8 @@ Max search range: 3 months.
 - Real-time pricing accuracy
 
 ## High-Level Diagram
+
+```text
          ┌──────────────────┐   cache hit   ┌───────────────┐
 User────▶│   Entry Point    │──────────────▶│    Display    │
          └──────────────────┘               └───────────────┘
@@ -54,6 +56,7 @@ User────▶│   Entry Point    │────────────�
         ┌─────────┐   ┌─────────┐   ┌─────────┐
         │ Vueling │   │Norwegian│   │Eurowings│
         └─────────┘   └─────────┘   └─────────┘
+```
 
 ## Components
 
@@ -62,7 +65,7 @@ User────▶│   Entry Point    │────────────�
 | Field          | Value |
 |----------------|-------|
 | Responsibility | Parse and validate CLI arguments |
-| Inputs         | `departure_airport` (IATA code, EU only), `timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month), `budget` (euros) |
+| Inputs         | `departure_airport` (IATA code, EU only)<br>`timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month)<br>`budget` (euros) |
 | Outputs        | Validated params passed to `flight_search.py` |
 | Key files      | `cli.py` |
 | External calls | None |
@@ -130,14 +133,17 @@ User────▶│   Entry Point    │────────────�
 9. `display.py` prints filtered results as table
 
 ## Data Model
+
 Flight:
-destination_iata: str      # e.g. "BCN"
-destination_city: str      # e.g. "Barcelona"
-destination_country: str   # e.g. "Spain"
-airline: str               # e.g. "Ryanair"
-departure_time: datetime
-arrival_time: datetime
-price_eur: float
+```
+  destination_iata: str      # e.g. "BCN"
+  destination_city: str      # e.g. "Barcelona"
+  destination_country: str   # e.g. "Spain"
+  airline: str               # e.g. "Ryanair"
+  departure_time: datetime
+  arrival_time: datetime
+  price_eur: float
+```
 
 Cache file: `{airport}_{YYYYMMDD}.json` — list of Flight objects
 
