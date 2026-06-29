@@ -6,67 +6,102 @@
 
 ## Project Overview
 
-This is a script built with python. It searchs all European budget flights according to your departure point and time range.
+A Python CLI tool that searches for budget flights from a European departure airport within a given time range and budget. It scrapes budget airline websites, caches results locally for 1 week, and displays results as a table.
+
+Entry point: `python src/flight_search.py [departure_airport] [timerange] [budget]`
+
+See ARCHITECTURE.md for full design decisions.
 
 ## Tech Stack
 
-| Layer       | Technology        | Version |
-|-------------|-------------------|---------|
-| Language    | Python            |         |
-| Framework   |                   |         |
-| Database    |                   |         |
-| Test runner |                   |         |
-| Linter      |                   |         |
-| Formatter   |                   |         |
+| Layer         | Technology     | Version |
+|---------------|----------------|---------|
+| Language      | Python         | 3.12+   |
+| HTTP client   | ryanair-py     | latest  |
+| HTML parser   | beautifulsoup4 | latest  |
+| HTTP          | requests       | latest  |
+| Table display | rich           | latest  |
+| Test runner   | pytest         | latest  |
+| Linter        | ruff           | latest  |
+| Formatter     | ruff format    | latest  |
+| Env manager   | uv             | latest  |
 
 ## Setup & Commands
 
 ```bash
-# Install dependencies
-<command>
+# Install dependencies (including dev tools)
+uv sync --extra dev
 
-# Run development server / start the app
-<command>
+# Run the CLI
+uv run python src/flight_search.py EIN 1m 50
 
 # Run the full test suite
-<command>
+uv run pytest
 
-# Run a single test / file
-<command>
+# Run a single test file
+uv run pytest tests/test_scraper.py -v
 
 # Lint
-<command>
+uv run ruff check src/
+
+# Format
+uv run ruff format src/
 
 # Type-check
-<command>
-
-# Build for production
-<command>
+uv run mypy src/
 ```
 
 ## Project Layout
 
 ```
 /
-├── src/          # Application source
-│   ├── ...
-├── tests/        # Tests — mirrors src/ structure
-├── docs/         # Human-facing documentation
-└── scripts/      # One-off tooling
+├── src/
+│   ├── __init__.py         # Package marker — do not modify
+│   ├── flight_search.py    # Entry point — orchestrates all modules
+│   ├── cli.py              # Argument parsing and validation
+│   ├── cache.py            # Read/write local JSON cache
+│   ├── scraper.py          # Scrape budget airline sites
+│   ├── display.py          # Format and print results as table
+│   └── eu_airports.json    # Static IATA to city/country lookup
+├── tests/                  # pytest tests — mirrors src/ structure
+│   ├── test_cli.py
+│   ├── test_cache.py
+│   ├── test_scraper.py
+│   └── test_display.py
+├── cache/                  # Auto-generated cache files (gitignored)
+├── ARCHITECTURE.md
+├── AGENTS.md
+└── pyproject.toml
 ```
 
-<!-- Generated / compiled output: -->
 Do not edit files under `dist/`, `build/`, or `generated/` — they are auto-generated.
+
+## Data Model
+
+Flight dict fields:
+- `destination_iata` — e.g. "BCN"
+- `destination_city` — e.g. "Barcelona"
+- `destination_country` — e.g. "Spain"
+- `airline` — e.g. "Ryanair"
+- `departure_time` — datetime
+- `arrival_time` — datetime
+- `price_eur` — float
+
+Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 
 ## Security
 
 - Never read, log, or commit secrets, API keys, or credentials.
-<!-- - Do not modify files in `<sensitive-path>` without an explicit instruction to do so. -->
-<!-- - Any other security constraint specific to this repo -->
+- Never make real network requests in tests — mock all HTTP calls.
 
 ## Agent Behaviour
 
 - Confirm scope before writing code when the task is ambiguous.
 - Make the smallest change that satisfies acceptance criteria.
 - Do not introduce new dependencies without asking first.
+- Do NOT use playwright, selenium, or any browser automation — use HTTP libraries only.
+- Use pytest only — never use unittest.
+- Use type hints on all functions.
+- Add docstrings on all public methods.
+- Handle scraping failures gracefully — log the error and return empty list, never raise.
 - Summarise what changed and why at the end of each session.

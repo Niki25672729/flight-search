@@ -134,18 +134,18 @@ User────▶│   Entry Point    │────────────�
 
 ## Data Model
 
-Flight:
-```
-  destination_iata: str      # e.g. "BCN"
-  destination_city: str      # e.g. "Barcelona"
-  destination_country: str   # e.g. "Spain"
-  airline: str               # e.g. "Ryanair"
-  departure_time: datetime
-  arrival_time: datetime
-  price_eur: float
-```
+## Data Model
 
-Cache file: `{airport}_{YYYYMMDD}.json` — list of Flight objects
+Flight dict fields:
+- `destination_iata` — e.g. "BCN"
+- `destination_city` — e.g. "Barcelona"
+- `destination_country` — e.g. "Spain"
+- `airline` — e.g. "Ryanair"
+- `departure_time` — datetime
+- `arrival_time` — datetime
+- `price_eur` — float
+
+Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 
 ## Key Design Decisions
 
@@ -192,7 +192,7 @@ Cache file: `{airport}_{YYYYMMDD}.json` — list of Flight objects
 
 | Airline | Website | API available |
 |---------|---------|---------------|
-| Ryanair | ryanair.com | Unofficial (not used) |
+| Ryanair | ryanair.com | Unofficial |
 | easyJet | easyjet.com | No |
 | Wizz Air | wizzair.com | No |
 | Vueling | vueling.com | No |
