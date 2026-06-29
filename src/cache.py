@@ -64,7 +64,7 @@ def read_cache(departure_airport: str) -> Optional[List[Dict]]:
         if match:  # Filename matches the expected pattern {airport}_{YYYYMMDD}.json
             file_iata_code, date_str = match.groups()
 
-            if file_iata_code == departure_airport: # File is for the current departure airport
+            if file_iata_code == departure_airport:  # File is for the current departure airport
                 try:
                     # Attempt to parse the date from the filename
                     file_date = datetime.strptime(date_str, DATE_FORMAT)
@@ -90,12 +90,14 @@ def read_cache(departure_airport: str) -> Optional[List[Dict]]:
 
                 except ValueError:
                     # Date part of the filename is malformed
-                    print(f"Warning: Malformed date '{date_str}' in cache filename for {departure_airport}: {filename}.")
+                    print(
+                        f"Warning: Malformed date '{date_str}' in cache filename for {departure_airport}: {filename}."
+                    )
                     # Attempt to delete the malformed file
                     _delete_file(filepath, "malformed date cache file")
             # Else (file_iata_code != departure_airport), it's for another airport; ignore it.
-        else: # Filename does not match FILENAME_REGEX
-            if filename.startswith(f"{departure_airport}_") and filename.endswith(".json"): # Seems to be for this airport but malformed
+        else:  # Filename does not match FILENAME_REGEX — seems to be for this airport but malformed
+            if filename.startswith(f"{departure_airport}_") and filename.endswith(".json"):
                 print(f"Warning: Malformed filename (not {DATE_FORMAT} format) for {departure_airport}: {filename}.")
                 _delete_file(filepath, "malformed cache filename file")
 
