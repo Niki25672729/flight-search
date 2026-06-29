@@ -1,148 +1,586 @@
-[
-    "AAH",
-    "AAL",
-    "AAR",
-    "ABZ",
-    "ADA",
-    "ADB",
-    "AGP",
-    "AHO",
-    "AJA",
-    "ALC",
-    "AMS",
-    "ANR",
-    "AOI",
-    "ARN",
-    "ATH",
-    "AYT",
-    "BCN",
-    "BDS",
-    "BEG",
-    "BER",
-    "BFS",
-    "BGY",
-    "BHD",
-    "BHX",
-    "BIO",
-    "BIQ",
-    "BLL",
-    "BLQ",
-    "BOD",
-    "BOJ",
-    "BRE",
-    "BRI",
-    "BRS",
-    "BRU",
-    "BSL",
-    "BTS",
-    "BUD",
-    "BVA",
-    "CAG",
-    "CDG",
-    "CFU",
-    "CGN",
-    "CHQ",
-    "CIA",
-    "CLJ",
-    "CPH",
-    "CRL",
-    "CTA",
-    "DBV",
-    "DRS",
-    "DTM",
-    "DUB",
-    "DUS",
-    "EDI",
-    "EIN",
-    "EMA",
-    "ESB",
-    "FAO",
-    "FCO",
-    "FKB",
-    "FLR",
-    "FMM",
-    "FMO",
-    "FRA",
-    "GDN",
-    "GLA",
-    "GOT",
-    "GRO",
-    "GRQ",
-    "GVA",
-    "HAJ",
-    "HAM",
-    "HEL",
-    "HER",
-    "HHN",
-    "IBZ",
-    "IST",
-    "IVA",
-    "JMK",
-    "JTR",
-    "KTW",
-    "KRK",
-    "KUN",
-    "LBA",
-    "LCG",
-    "LHR",
-    "LPL",
-    "LIS",
-    "LJU",
-    "LPA",
-    "LPX",
-    "LTN",
-    "LUX",
-    "LYS",
-    "MAD",
-    "MAH",
-    "MAN",
-    "MLA",
-    "MRS",
-    "MST",
-    "MUC",
-    "NAP",
-    "NCE",
-    "NCL",
-    "NTE",
-    "NUE",
-    "NYO",
-    "OPO",
-    "ORK",
-    "ORY",
-    "OSL",
-    "OTP",
-    "PMI",
-    "PMO",
-    "POZ",
-    "PRG",
-    "PSA",
-    "PUY",
-    "RIX",
-    "RTM",
-    "RZE",
-    "SAW",
-    "SCQ",
-    "SDR",
-    "SNN",
-    "SOF",
-    "SPU",
-    "STN",
-    "STR",
-    "SVG",
-    "SXB",
-    "SZG",
-    "TLL",
-    "TLS",
-    "TRF",
-    "TSF",
-    "VCE",
-    "VIE",
-    "VLC",
-    "VNO",
-    "WAW",
-    "WMI",
-    "WRO",
-    "ZAD",
-    "ZAG",
-    "ZRH"
-]
+{
+  "AAH": {
+    "city": "Aachen",
+    "country": "Germany"
+  },
+  "AAL": {
+    "city": "Aalborg",
+    "country": "Denmark"
+  },
+  "AAR": {
+    "city": "Aarhus",
+    "country": "Denmark"
+  },
+  "ABZ": {
+    "city": "Aberdeen",
+    "country": "United Kingdom"
+  },
+  "ADA": {
+    "city": "Adana",
+    "country": "Turkey"
+  },
+  "ADB": {
+    "city": "Izmir",
+    "country": "Turkey"
+  },
+  "AGP": {
+    "city": "Malaga",
+    "country": "Spain"
+  },
+  "AHO": {
+    "city": "Alghero",
+    "country": "Italy"
+  },
+  "AJA": {
+    "city": "Ajaccio",
+    "country": "France"
+  },
+  "ALC": {
+    "city": "Alicante",
+    "country": "Spain"
+  },
+  "AMS": {
+    "city": "Amsterdam",
+    "country": "Netherlands"
+  },
+  "ANR": {
+    "city": "Antwerp",
+    "country": "Belgium"
+  },
+  "AOI": {
+    "city": "Ancona",
+    "country": "Italy"
+  },
+  "ARN": {
+    "city": "Stockholm",
+    "country": "Sweden"
+  },
+  "ATH": {
+    "city": "Athens",
+    "country": "Greece"
+  },
+  "AYT": {
+    "city": "Antalya",
+    "country": "Turkey"
+  },
+  "BCN": {
+    "city": "Barcelona",
+    "country": "Spain"
+  },
+  "BDS": {
+    "city": "Brindisi",
+    "country": "Italy"
+  },
+  "BEG": {
+    "city": "Belgrade",
+    "country": "Serbia"
+  },
+  "BER": {
+    "city": "Berlin",
+    "country": "Germany"
+  },
+  "BFS": {
+    "city": "Belfast",
+    "country": "United Kingdom"
+  },
+  "BGY": {
+    "city": "Bergamo",
+    "country": "Italy"
+  },
+  "BHD": {
+    "city": "Belfast",
+    "country": "United Kingdom"
+  },
+  "BHX": {
+    "city": "Birmingham",
+    "country": "United Kingdom"
+  },
+  "BIO": {
+    "city": "Bilbao",
+    "country": "Spain"
+  },
+  "BIQ": {
+    "city": "Biarritz",
+    "country": "France"
+  },
+  "BLL": {
+    "city": "Billund",
+    "country": "Denmark"
+  },
+  "BLQ": {
+    "city": "Bologna",
+    "country": "Italy"
+  },
+  "BOD": {
+    "city": "Bordeaux",
+    "country": "France"
+  },
+  "BOJ": {
+    "city": "Burgas",
+    "country": "Bulgaria"
+  },
+  "BRE": {
+    "city": "Bremen",
+    "country": "Germany"
+  },
+  "BRI": {
+    "city": "Bari",
+    "country": "Italy"
+  },
+  "BRS": {
+    "city": "Bristol",
+    "country": "United Kingdom"
+  },
+  "BRU": {
+    "city": "Brussels",
+    "country": "Belgium"
+  },
+  "BSL": {
+    "city": "Basel",
+    "country": "Switzerland"
+  },
+  "BTS": {
+    "city": "Bratislava",
+    "country": "Slovakia"
+  },
+  "BUD": {
+    "city": "Budapest",
+    "country": "Hungary"
+  },
+  "BVA": {
+    "city": "Paris",
+    "country": "France"
+  },
+  "CAG": {
+    "city": "Cagliari",
+    "country": "Italy"
+  },
+  "CDG": {
+    "city": "Paris",
+    "country": "France"
+  },
+  "CFU": {
+    "city": "Corfu",
+    "country": "Greece"
+  },
+  "CGN": {
+    "city": "Cologne",
+    "country": "Germany"
+  },
+  "CHQ": {
+    "city": "Chania",
+    "country": "Greece"
+  },
+  "CIA": {
+    "city": "Rome",
+    "country": "Italy"
+  },
+  "CLJ": {
+    "city": "Cluj-Napoca",
+    "country": "Romania"
+  },
+  "CPH": {
+    "city": "Copenhagen",
+    "country": "Denmark"
+  },
+  "CRL": {
+    "city": "Brussels",
+    "country": "Belgium"
+  },
+  "CTA": {
+    "city": "Catania",
+    "country": "Italy"
+  },
+  "DBV": {
+    "city": "Dubrovnik",
+    "country": "Croatia"
+  },
+  "DRS": {
+    "city": "Dresden",
+    "country": "Germany"
+  },
+  "DTM": {
+    "city": "Dortmund",
+    "country": "Germany"
+  },
+  "DUB": {
+    "city": "Dublin",
+    "country": "Ireland"
+  },
+  "DUS": {
+    "city": "Dusseldorf",
+    "country": "Germany"
+  },
+  "EDI": {
+    "city": "Edinburgh",
+    "country": "United Kingdom"
+  },
+  "EIN": {
+    "city": "Eindhoven",
+    "country": "Netherlands"
+  },
+  "EMA": {
+    "city": "Nottingham",
+    "country": "United Kingdom"
+  },
+  "ESB": {
+    "city": "Ankara",
+    "country": "Turkey"
+  },
+  "FAO": {
+    "city": "Faro",
+    "country": "Portugal"
+  },
+  "FCO": {
+    "city": "Rome",
+    "country": "Italy"
+  },
+  "FKB": {
+    "city": "Karlsruhe",
+    "country": "Germany"
+  },
+  "FLR": {
+    "city": "Florence",
+    "country": "Italy"
+  },
+  "FMM": {
+    "city": "Memmingen",
+    "country": "Germany"
+  },
+  "FMO": {
+    "city": "Munster",
+    "country": "Germany"
+  },
+  "FRA": {
+    "city": "Frankfurt",
+    "country": "Germany"
+  },
+  "GDN": {
+    "city": "Gdansk",
+    "country": "Poland"
+  },
+  "GLA": {
+    "city": "Glasgow",
+    "country": "United Kingdom"
+  },
+  "GOT": {
+    "city": "Gothenburg",
+    "country": "Sweden"
+  },
+  "GRO": {
+    "city": "Girona",
+    "country": "Spain"
+  },
+  "GRQ": {
+    "city": "Groningen",
+    "country": "Netherlands"
+  },
+  "GVA": {
+    "city": "Geneva",
+    "country": "Switzerland"
+  },
+  "HAJ": {
+    "city": "Hannover",
+    "country": "Germany"
+  },
+  "HAM": {
+    "city": "Hamburg",
+    "country": "Germany"
+  },
+  "HEL": {
+    "city": "Helsinki",
+    "country": "Finland"
+  },
+  "HER": {
+    "city": "Heraklion",
+    "country": "Greece"
+  },
+  "HHN": {
+    "city": "Frankfurt",
+    "country": "Germany"
+  },
+  "IBZ": {
+    "city": "Ibiza",
+    "country": "Spain"
+  },
+  "IST": {
+    "city": "Istanbul",
+    "country": "Turkey"
+  },
+  "IVA": {
+    "city": "Ivalo",
+    "country": "Finland"
+  },
+  "JMK": {
+    "city": "Mykonos",
+    "country": "Greece"
+  },
+  "JTR": {
+    "city": "Santorini",
+    "country": "Greece"
+  },
+  "KTW": {
+    "city": "Katowice",
+    "country": "Poland"
+  },
+  "KRK": {
+    "city": "Krakow",
+    "country": "Poland"
+  },
+  "KUN": {
+    "city": "Kaunas",
+    "country": "Lithuania"
+  },
+  "LBA": {
+    "city": "Leeds",
+    "country": "United Kingdom"
+  },
+  "LCG": {
+    "city": "La Coruna",
+    "country": "Spain"
+  },
+  "LHR": {
+    "city": "London",
+    "country": "United Kingdom"
+  },
+  "LPL": {
+    "city": "Liverpool",
+    "country": "United Kingdom"
+  },
+  "LIS": {
+    "city": "Lisbon",
+    "country": "Portugal"
+  },
+  "LJU": {
+    "city": "Ljubljana",
+    "country": "Slovenia"
+  },
+  "LPA": {
+    "city": "Las Palmas",
+    "country": "Spain"
+  },
+  "LPX": {
+    "city": "Liepaja",
+    "country": "Latvia"
+  },
+  "LTN": {
+    "city": "London",
+    "country": "United Kingdom"
+  },
+  "LUX": {
+    "city": "Luxembourg",
+    "country": "Luxembourg"
+  },
+  "LYS": {
+    "city": "Lyon",
+    "country": "France"
+  },
+  "MAD": {
+    "city": "Madrid",
+    "country": "Spain"
+  },
+  "MAH": {
+    "city": "Menorca",
+    "country": "Spain"
+  },
+  "MAN": {
+    "city": "Manchester",
+    "country": "United Kingdom"
+  },
+  "MLA": {
+    "city": "Malta",
+    "country": "Malta"
+  },
+  "MRS": {
+    "city": "Marseille",
+    "country": "France"
+  },
+  "MST": {
+    "city": "Maastricht",
+    "country": "Netherlands"
+  },
+  "MUC": {
+    "city": "Munich",
+    "country": "Germany"
+  },
+  "NAP": {
+    "city": "Naples",
+    "country": "Italy"
+  },
+  "NCE": {
+    "city": "Nice",
+    "country": "France"
+  },
+  "NCL": {
+    "city": "Newcastle",
+    "country": "United Kingdom"
+  },
+  "NTE": {
+    "city": "Nantes",
+    "country": "France"
+  },
+  "NUE": {
+    "city": "Nuremberg",
+    "country": "Germany"
+  },
+  "NYO": {
+    "city": "Stockholm",
+    "country": "Sweden"
+  },
+  "OPO": {
+    "city": "Porto",
+    "country": "Portugal"
+  },
+  "ORK": {
+    "city": "Cork",
+    "country": "Ireland"
+  },
+  "ORY": {
+    "city": "Paris",
+    "country": "France"
+  },
+  "OSL": {
+    "city": "Oslo",
+    "country": "Norway"
+  },
+  "OTP": {
+    "city": "Bucharest",
+    "country": "Romania"
+  },
+  "PMI": {
+    "city": "Palma de Mallorca",
+    "country": "Spain"
+  },
+  "PMO": {
+    "city": "Palermo",
+    "country": "Italy"
+  },
+  "POZ": {
+    "city": "Poznan",
+    "country": "Poland"
+  },
+  "PRG": {
+    "city": "Prague",
+    "country": "Czech Republic"
+  },
+  "PSA": {
+    "city": "Pisa",
+    "country": "Italy"
+  },
+  "PUY": {
+    "city": "Pula",
+    "country": "Croatia"
+  },
+  "RIX": {
+    "city": "Riga",
+    "country": "Latvia"
+  },
+  "RTM": {
+    "city": "Rotterdam",
+    "country": "Netherlands"
+  },
+  "RZE": {
+    "city": "Rzeszow",
+    "country": "Poland"
+  },
+  "SAW": {
+    "city": "Istanbul",
+    "country": "Turkey"
+  },
+  "SCQ": {
+    "city": "Santiago de Compostela",
+    "country": "Spain"
+  },
+  "SDR": {
+    "city": "Santander",
+    "country": "Spain"
+  },
+  "SNN": {
+    "city": "Shannon",
+    "country": "Ireland"
+  },
+  "SOF": {
+    "city": "Sofia",
+    "country": "Bulgaria"
+  },
+  "SPU": {
+    "city": "Split",
+    "country": "Croatia"
+  },
+  "STN": {
+    "city": "London",
+    "country": "United Kingdom"
+  },
+  "STR": {
+    "city": "Stuttgart",
+    "country": "Germany"
+  },
+  "SVG": {
+    "city": "Stavanger",
+    "country": "Norway"
+  },
+  "SXB": {
+    "city": "Strasbourg",
+    "country": "France"
+  },
+  "SZG": {
+    "city": "Salzburg",
+    "country": "Austria"
+  },
+  "TLL": {
+    "city": "Tallinn",
+    "country": "Estonia"
+  },
+  "TLS": {
+    "city": "Toulouse",
+    "country": "France"
+  },
+  "TRF": {
+    "city": "Oslo",
+    "country": "Norway"
+  },
+  "TSF": {
+    "city": "Venice",
+    "country": "Italy"
+  },
+  "VCE": {
+    "city": "Venice",
+    "country": "Italy"
+  },
+  "VIE": {
+    "city": "Vienna",
+    "country": "Austria"
+  },
+  "VLC": {
+    "city": "Valencia",
+    "country": "Spain"
+  },
+  "VNO": {
+    "city": "Vilnius",
+    "country": "Lithuania"
+  },
+  "WAW": {
+    "city": "Warsaw",
+    "country": "Poland"
+  },
+  "WMI": {
+    "city": "Warsaw",
+    "country": "Poland"
+  },
+  "WRO": {
+    "city": "Wroclaw",
+    "country": "Poland"
+  },
+  "ZAD": {
+    "city": "Zadar",
+    "country": "Croatia"
+  },
+  "ZAG": {
+    "city": "Zagreb",
+    "country": "Croatia"
+  },
+  "ZRH": {
+    "city": "Zurich",
+    "country": "Switzerland"
+  }
+}

@@ -3,10 +3,13 @@ import re
 import json
 from datetime import datetime, timedelta
 
-# Load European airports from JSON file
+# Load European airports for validation from JSON file
 try:
     with open("src/eu_airports.json", "r") as f:
-        EU_AIRPORTS = set(json.load(f))
+        # eu_airports.json is expected to be a dictionary mapping IATA to details.
+        # cli.py only needs the IATA codes for validation, so we extract the keys.
+        all_eu_airport_data = json.load(f)
+    EU_AIRPORTS = set(all_eu_airport_data.keys())
 except FileNotFoundError:
     print("Error: eu_airports.json not found. Please ensure it exists in the src/ directory.")
     EU_AIRPORTS = set() # Fallback to empty set to avoid further errors
