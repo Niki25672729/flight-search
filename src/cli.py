@@ -1,10 +1,12 @@
 import argparse
 import re
 import json
+import os
 
 # Load European airports for validation from JSON file
 try:
-    with open("src/eu_airports.json", "r") as f:
+    json_path = os.path.join(os.path.dirname(__file__), "eu_airports.json")
+    with open(json_path, "r") as f:
         # eu_airports.json is expected to be a dictionary mapping IATA to details.
         # cli.py only needs the IATA codes for validation, so we extract the keys.
         all_eu_airport_data = json.load(f)

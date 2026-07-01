@@ -11,6 +11,7 @@ from cli import (
     MAX_TIMERANGE_MONTHS
 )
 
+
 # ---------------------------
 # validate_departure_airport
 # ---------------------------
