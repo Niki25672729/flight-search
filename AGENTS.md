@@ -17,7 +17,7 @@ See ARCHITECTURE.md for full design decisions.
 | Layer         | Technology     | Version |
 |---------------|----------------|---------|
 | Language      | Python         | 3.12+   |
-| HTTP client   | ryanair-py     | latest  |
+| HTTP client   | ryanair-py     | 3.0.0   |
 | HTML parser   | beautifulsoup4 | latest  |
 | HTTP          | requests       | latest  |
 | Table display | rich           | latest  |
@@ -56,19 +56,21 @@ uv run mypy src/
 ```
 /
 ├── src/
-│   ├── __init__.py         # Package marker — do not modify
-│   ├── flight_search.py    # Entry point — orchestrates all modules
-│   ├── cli.py              # Argument parsing and validation
-│   ├── cache.py            # Read/write local JSON cache
-│   ├── scraper.py          # Scrape budget airline sites
-│   ├── display.py          # Format and print results as table
-│   └── eu_airports.json    # Static IATA to city/country lookup
-├── tests/                  # pytest tests — mirrors src/ structure
+│   ├── __init__.py             # Package marker — do not modify
+│   ├── flight_search.py        # Entry point — orchestrates all modules
+│   ├── cli.py                  # Argument parsing and validation
+│   ├── models.py               # Shared data model — Flight dataclass
+│   ├── cache.py                # Read/write local JSON cache
+│   ├── scraper.py              # Scrape budget airline sites
+│   ├── display.py              # Format and print results as table
+│   ├── eu_airports.json        # Static IATA to city/country lookup
+│   └── unknown_airports.json   # Auto-generated — unknown IATA codes discovered during scraping
+├── tests/                      # pytest tests — mirrors src/ structure
 │   ├── test_cli.py
 │   ├── test_cache.py
 │   ├── test_scraper.py
 │   └── test_display.py
-├── cache/                  # Auto-generated cache files (gitignored)
+├── cache/                      # Auto-generated cache files (gitignored)
 ├── ARCHITECTURE.md
 ├── AGENTS.md
 └── pyproject.toml
@@ -78,16 +80,21 @@ Do not edit files under `dist/`, `build/`, or `generated/` — they are auto-gen
 
 ## Data Model
 
-Flight dict fields:
-- `destination_iata` — e.g. "BCN"
-- `destination_city` — e.g. "Barcelona"
-- `destination_country` — e.g. "Spain"
-- `airline` — e.g. "Ryanair"
-- `departure_time` — datetime
-- `arrival_time` — datetime
-- `price_eur` — float
+All modules import `Flight` from `models.py`. Do not use raw dicts for flight data.
 
-Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
+```python
+@dataclass
+class Flight:
+    destination_iata: str
+    destination_city: str
+    destination_country: str
+    airline: str
+    departure_time: datetime
+    arrival_time: datetime | None  # Not available for all airlines
+    price_eur: float
+```
+
+Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight objects serialized as JSON.
 
 ## Security
 
@@ -103,5 +110,6 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 - Use pytest only — never use unittest.
 - Use type hints on all functions.
 - Add docstrings on all public methods.
+- Always use the `Flight` dataclass from `models.py` — never use raw dicts for flight data.
 - Handle scraping failures gracefully — log the error and return empty list, never raise.
 - Summarise what changed and why at the end of each session.

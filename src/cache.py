@@ -1,8 +1,11 @@
 import json
 import os
 import re
+from dataclasses import asdict
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from models import Flight
 
 # Configuration
 CACHE_DIR = "cache"
@@ -12,21 +15,25 @@ DATE_FORMAT = "%Y%m%d"
 FILENAME_REGEX = re.compile(r"^([A-Z]{3})_(\d{8})\.json$")
 
 
-def _serialize_datetime(obj: Any) -> Any:
+def _serialize_datetime(obj: object) -> str | dict[str, Any]:
     """JSON serializer for objects not serializable by default json code"""
     if isinstance(obj, datetime):
         return obj.isoformat()
+    if isinstance(obj, Flight):
+        return asdict(obj)
     raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
-def _deserialize_flight_data(data: List[Dict]) -> List[Dict]:
-    """Deserializes datetime strings back to datetime objects in flight data."""
-    for flight in data:
-        if "departure_time" in flight and isinstance(flight["departure_time"], str):
-            flight["departure_time"] = datetime.fromisoformat(flight["departure_time"])
-        if "arrival_time" in flight and isinstance(flight["arrival_time"], str):
-            flight["arrival_time"] = datetime.fromisoformat(flight["arrival_time"])
-    return data
+def _deserialize_flight_data(data: list[dict]) -> list[Flight]:
+    """Deserializes datetime strings back to datetime objects and converts dicts to Flight objects."""
+    deserialized_flights: list[Flight] = []
+    for flight_dict in data:
+        if "departure_time" in flight_dict and isinstance(flight_dict["departure_time"], str):
+            flight_dict["departure_time"] = datetime.fromisoformat(flight_dict["departure_time"])
+        if "arrival_time" in flight_dict and isinstance(flight_dict["arrival_time"], str):
+            flight_dict["arrival_time"] = datetime.fromisoformat(flight_dict["arrival_time"])
+        deserialized_flights.append(Flight(**flight_dict))
+    return deserialized_flights
 
 
 def _delete_file(filepath: str, description: str):
@@ -40,10 +47,10 @@ def _delete_file(filepath: str, description: str):
         print(f"Error deleting {description} file {os.path.basename(filepath)}: {e}")
 
 
-def read_cache(departure_airport: str) -> Optional[List[Dict]]:
+def read_cache(departure_airport: str) -> list[Flight] | None:
     """
     Reads cached flight data for a given departure airport.
-    Returns a list of flight dicts on cache hit, None on cache miss or expiry.
+    Returns a list of Flight objects on cache hit, None on cache miss or expiry.
     Deletes stale, corrupt, or malformed cache files.
     """
     cache_path = os.path.join(os.getcwd(), CACHE_DIR)
@@ -53,8 +60,8 @@ def read_cache(departure_airport: str) -> Optional[List[Dict]]:
 
     now = datetime.now()
 
-    freshest_valid_filepath: Optional[str] = None
-    freshest_valid_file_date: Optional[datetime] = None
+    freshest_valid_filepath: str | None = None
+    freshest_valid_file_date: datetime | None = None
 
     # Iterate through all files in the cache directory
     for filename in os.listdir(cache_path):
@@ -119,7 +126,7 @@ def read_cache(departure_airport: str) -> Optional[List[Dict]]:
         return None
 
 
-def write_cache(departure_airport: str, flights: List[Dict]):
+def write_cache(departure_airport: str, flights: list[Flight]):
     """
     Writes flight data to a new cache file and removes all previous cache files
     for the same departure airport.

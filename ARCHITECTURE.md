@@ -27,6 +27,7 @@ Max search range: 3 months.
 - Cache results in a local file (1 week TTL, timestamp in filename)
 - Display results as a table: destination (IATA code, city, country), airline, departure time, arrival time, price
 - Web interface to display flight results (deferred)
+- Scrape Ryanair flights for v1; other airlines planned for future versions
 
 **Non-Goals**
 - Booking flights
@@ -70,13 +71,23 @@ User────▶│   Entry Point    │────────────�
 | Key files      | `cli.py` |
 | External calls | None |
 
+### `models.py`
+
+| Field          | Value |
+|----------------|-------|
+| Responsibility | Shared data model definitions |
+| Inputs         | None |
+| Outputs        | `Flight` dataclass imported by cache, scraper, display |
+| Key files      | `models.py` |
+| External calls | None |
+
 ### `cache.py`
 
 | Field          | Value |
 |----------------|-------|
 | Responsibility | Read/write flight data cache, check TTL |
 | Inputs         | Departure airport (IATA code) |
-| Outputs        | List of Flight dicts on cache hit, None on cache miss or expiry |
+| Outputs        | List of Flight objects on cache hit, None on cache miss or expiry |
 | Key files      | `cache.py` |
 | External calls | Local filesystem — cache files named `{airport}_{YYYYMMDD}.json` |
 
@@ -86,7 +97,7 @@ User────▶│   Entry Point    │────────────�
 |----------------|-------|
 | Responsibility | Scrape budget airline sites for all flights from departure airport for next 3 months + 1 week buffer |
 | Inputs         | Departure airport (IATA code) |
-| Outputs        | List of `{destination, airline, departure_time, arrival_time, price}` |
+| Outputs        | List of Flight objects |
 | Key files      | `scraper.py` |
 | External calls | Ryanair, easyJet, Wizz Air, Vueling, Norwegian, Eurowings |
 
@@ -95,7 +106,7 @@ User────▶│   Entry Point    │────────────�
 | Field          | Value |
 |----------------|-------|
 | Responsibility | Format and print results as a table |
-| Inputs         | List of flight dicts |
+| Inputs         | List of Flight objects |
 | Outputs        | Printed table to stdout |
 | Key files      | `display.py` |
 | External calls | None |
@@ -125,27 +136,31 @@ User────▶│   Entry Point    │────────────�
 1. User runs `python flight_search.py EIN 1m 50`
 2. `cli.py` validates airport (EU only), parses time range, validates budget
 3. `flight_search.py` calls `cache.py` with departure airport
-4. If cache hit → load flights from cache file
+4. If cache hit → load flights from cache file as list of Flight objects
 5. If cache miss or expired → `flight_search.py` calls `scraper.py` with departure airport
-6. Scraper fetches all flights for next 3 months + 1 week buffer, returns list of Flight dicts
+6. Scraper fetches all flights for next 3 months + 1 week buffer, returns list of Flight objects
 7. `flight_search.py` calls `cache.py` write method to save scraped results
 8. `flight_search.py` filters flights by time range and budget
 9. `display.py` prints filtered results as table
 
 ## Data Model
 
-## Data Model
+Flight:
+```
+destination_iata: str        # e.g. "BCN"
+destination_city: str        # e.g. "Barcelona"
+destination_country: str     # e.g. "Spain"
+airline: str                 # e.g. "Ryanair"
+departure_time: datetime
+arrival_time: datetime | None  # Not available for all airlines
+price_eur: float
+```
 
-Flight dict fields:
-- `destination_iata` — e.g. "BCN"
-- `destination_city` — e.g. "Barcelona"
-- `destination_country` — e.g. "Spain"
-- `airline` — e.g. "Ryanair"
-- `departure_time` — datetime
-- `arrival_time` — datetime
-- `price_eur` — float
+Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight objects
 
-Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
+## Unknown Airport Discovery
+
+When `scraper.py` encounters a destination IATA code not in `eu_airports.json`, it logs the new airport (city and country from the airline's response) to `src/unknown_airports.json`. This file should be periodically reviewed and merged into `eu_airports.json`.
 
 ## Key Design Decisions
 
@@ -161,16 +176,18 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 | 8 | Scrape 3 months + 1 week buffer upfront | Scrape per query | Reduces scraping frequency; budget/timerange applied as filters |
 | 9 | `flight_search.py` orchestrates all modules | Merge logic into cache.py | Clear separation of concerns |
 | 10 | Cache filename uses YYYYMMDD only | Full timestamp | Date precision sufficient for 1 week TTL |
+| 11 | `Flight` dataclass in `models.py` | Raw dicts | Type safety and shared definition across modules |
+| 12 | `arrival_time` is optional (None) | Require arrival time | Not all airlines provide arrival time in scrape response |
 
 ## External Dependencies
 
 | Name | Version | Purpose | Docs |
 |------|---------|---------|------|
+| ryanair-py | 3.0.0 | Ryanair flight data via unofficial API | https://github.com/cohaolain/ryanair-py |
 | requests | latest | HTTP requests for scraping | https://docs.python-requests.org |
 | beautifulsoup4 | latest | HTML parsing | https://www.crummy.com/software/BeautifulSoup |
 | rich | latest | Table display in terminal | https://rich.readthedocs.io |
-| playwright | latest | JS-heavy page scraping | https://playwright.dev/python |
-| iata-data | - | Static IATA airport lookup (bundled as JSON) | - |
+| playwright | latest | JS-heavy page scraping for future airlines | https://playwright.dev/python |
 
 ## Constraints & Assumptions
 
@@ -178,8 +195,8 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 - Max search range is 3 months
 - Prices may be stale up to 1 week due to caching
 - Airline websites may change their HTML structure and break the scraper
-- Some airlines may require JavaScript rendering (playwright used as fallback)
 - Budget and time range are filter parameters applied after loading from cache, not scrape parameters
+- `arrival_time` is None for airlines that do not provide it in their scrape response
 
 ## Open Questions
 
@@ -190,14 +207,14 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 
 ## Supported Airlines
 
-| Airline | Website | API available |
-|---------|---------|---------------|
-| Ryanair | ryanair.com | Unofficial |
-| easyJet | easyjet.com | No |
-| Wizz Air | wizzair.com | No |
-| Vueling | vueling.com | No |
-| Norwegian | norwegian.com | No |
-| Eurowings | eurowings.com | No |
+| Airline | Website | Method | Status |
+|---------|---------|--------|--------|
+| Ryanair | ryanair.com | ryanair-py library | ✅ v1 |
+| easyJet | easyjet.com | Scraping | 🔜 planned |
+| Wizz Air | wizzair.com | Scraping | 🔜 planned |
+| Vueling | vueling.com | Scraping | 🔜 planned |
+| Norwegian | norwegian.com | Scraping | 🔜 planned |
+| Eurowings | eurowings.com | Scraping | 🔜 planned |
 
 ## Non-Functional Requirements
 
@@ -217,3 +234,5 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight dicts
 | 003 | Support 6 major European budget airlines | Accepted |
 | 004 | `flight_search.py` orchestrates all modules | Accepted |
 | 005 | Scrape 3 months + 1 week buffer, filter at display time | Accepted |
+| 006 | `Flight` dataclass defined in `models.py`, shared across modules | Accepted |
+| 007 | `arrival_time` is optional — not all airlines provide it | Accepted |
