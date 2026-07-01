@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 *.pyc
+.ryanair_cookies.json
+unknown_airports.json
