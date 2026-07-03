@@ -1,16 +1,14 @@
 import json
+import logging
 import os
 import re
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from models import Flight
+from config import CACHE_DIR, CACHE_TTL, DATE_FORMAT
 
-# Configuration
-CACHE_DIR = "cache"
-CACHE_TTL = timedelta(weeks=1)
-DATE_FORMAT = "%Y%m%d"
 # Regex to match cache filenames: {airport}_{YYYYMMDD}.json
 FILENAME_REGEX = re.compile(r"^([A-Z]{3})_(\d{8})\.json$")
 
@@ -42,9 +40,9 @@ def _delete_file(filepath: str, description: str):
     """
     try:
         os.remove(filepath)
-        print(f"Cleaned up {description}: {os.path.basename(filepath)}")
+        logging.warning(f"Cleaned up {description}: {os.path.basename(filepath)}")
     except OSError as e:
-        print(f"Error deleting {description} file {os.path.basename(filepath)}: {e}")
+        logging.error(f"Error deleting {description} file {os.path.basename(filepath)}: {e}")
 
 
 def read_cache(departure_airport: str) -> list[Flight] | None:
@@ -55,7 +53,7 @@ def read_cache(departure_airport: str) -> list[Flight] | None:
     """
     cache_path = os.path.join(os.getcwd(), CACHE_DIR)
     if not os.path.exists(cache_path):
-        print(f"Cache miss for {departure_airport}: Cache directory '{CACHE_DIR}' does not exist.")
+        logging.warning(f"Cache miss for {departure_airport}: Cache directory '{CACHE_DIR}' does not exist.")
         return None
 
     now = datetime.now()
@@ -97,7 +95,7 @@ def read_cache(departure_airport: str) -> list[Flight] | None:
 
                 except ValueError:
                     # Date part of the filename is malformed
-                    print(
+                    logging.warning(
                         f"Warning: Malformed date '{date_str}' in cache filename for {departure_airport}: {filename}."
                     )
                     # Attempt to delete the malformed file
@@ -105,7 +103,9 @@ def read_cache(departure_airport: str) -> list[Flight] | None:
             # Else (file_iata_code != departure_airport), it's for another airport; ignore it.
         else:  # Filename does not match FILENAME_REGEX — seems to be for this airport but malformed
             if filename.startswith(f"{departure_airport}_") and filename.endswith(".json"):
-                print(f"Warning: Malformed filename (not {DATE_FORMAT} format) for {departure_airport}: {filename}.")
+                logging.warning(
+                    f"Warning: Malformed filename (not {DATE_FORMAT} format) for {departure_airport}: {filename}."
+                )
                 _delete_file(filepath, "malformed cache filename file")
 
     # After iterating through all files, attempt to load the freshest valid one found
@@ -113,16 +113,16 @@ def read_cache(departure_airport: str) -> list[Flight] | None:
         try:
             with open(freshest_valid_filepath, "r") as f:
                 data = json.load(f)
-            print(f"Cache hit for {departure_airport}: Loaded {os.path.basename(freshest_valid_filepath)}")
+            logging.info(f"Cache hit for {departure_airport}: Loaded {os.path.basename(freshest_valid_filepath)}")
             return _deserialize_flight_data(data)
         except Exception as e:
             # Catch JSONDecodeError specifically, and other read errors
             error_type = "corrupt" if isinstance(e, json.JSONDecodeError) else "problematic"
-            print(f"Error: Cache file {os.path.basename(freshest_valid_filepath)} is {error_type}. {e}.")
+            logging.error(f"Error: Cache file {os.path.basename(freshest_valid_filepath)} is {error_type}. {e}.")
             _delete_file(freshest_valid_filepath, f"{error_type} cache file")
             return None
     else:
-        print(f"Cache miss for {departure_airport}: No fresh cache found after checking and cleanup.")
+        logging.warning(f"Cache miss for {departure_airport}: No fresh cache found after checking and cleanup.")
         return None
 
 
@@ -153,6 +153,6 @@ def write_cache(departure_airport: str, flights: list[Flight]):
     try:
         with open(new_filepath, "w") as f:
             json.dump(flights, f, default=_serialize_datetime, indent=4)
-        print(f"Cache written to {new_filename}")
+        logging.info(f"Cache written to {new_filename}")
     except Exception as e:
-        print(f"Error writing cache to {new_filename}: {e}")
+        logging.error(f"Error writing cache to {new_filename}: {e}")

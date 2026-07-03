@@ -13,3 +13,10 @@ class Flight:
     departure_time: datetime
     arrival_time: datetime | None  # Not available for all airlines
     price_eur: float
+
+    def __str__(self) -> str:
+        departure = self.departure_time.strftime("%Y-%m-%d %H:%M")
+        return (
+            f"{self.destination_iata} ({self.destination_city}, {self.destination_country}) | "
+            f"{self.airline} | {departure} | €{self.price_eur:.2f}"
+        )

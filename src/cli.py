@@ -1,21 +1,8 @@
 import argparse
 import re
-import json
-import os
 
-# Load European airports for validation from JSON file
-try:
-    json_path = os.path.join(os.path.dirname(__file__), "eu_airports.json")
-    with open(json_path, "r") as f:
-        # eu_airports.json is expected to be a dictionary mapping IATA to details.
-        # cli.py only needs the IATA codes for validation, so we extract the keys.
-        all_eu_airport_data = json.load(f)
-    EU_AIRPORTS = set(all_eu_airport_data.keys())
-except FileNotFoundError:
-    print("Error: eu_airports.json not found. Please ensure it exists in the src/ directory.")
-    EU_AIRPORTS = set()  # Fallback to empty set to avoid further errors
-
-MAX_TIMERANGE_MONTHS = 3
+from config import MAX_TIMERANGE_MONTHS
+from utils import EU_AIRPORTS
 
 
 def validate_departure_airport(airport: str) -> str:

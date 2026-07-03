@@ -9,30 +9,8 @@ from ryanair import Ryanair
 from ryanair.SessionManager import SessionManager
 
 from models import Flight
-
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# Load European airports with their details from JSON file (expected to be a dictionary)
-try:
-    json_path = os.path.join(os.path.dirname(__file__), "eu_airports.json")
-    with open(json_path, "r") as f:
-        EU_AIRPORT_DETAILS = json.load(f)
-except FileNotFoundError:
-    logging.error("Error: eu_airports.json not found. Please ensure it exists in the src/ directory.")
-    EU_AIRPORT_DETAILS = {}  # Fallback to empty dict to avoid further errors
-
-# Load unknown airports that need to be reviewed
-try:
-    unknown_json_path = os.path.join(os.path.dirname(__file__), "unknown_airports.json")
-    with open(unknown_json_path, "r") as f:
-        unknown_airport_details = json.load(f)
-except FileNotFoundError:
-    unknown_airport_details = {}
-
-# Ryanair API instance cache settings
-COOKIE_CACHE_PATH = os.path.join(os.path.dirname(__file__), ".ryanair_cookies.json")
-COOKIE_TTL_SECONDS = 3600  # 1 hour
+from config import COOKIE_CACHE_PATH, COOKIE_TTL_SECONDS, UNKNOWN_AIRPORTS_PATH, SCRAPE_BUFFER_DAYS, RYANAIR_SESSION_URL
+from utils import EU_AIRPORT_DETAILS, unknown_airport_details
 
 
 def _get_ryanair_session() -> requests.Session:
@@ -54,7 +32,7 @@ def _get_ryanair_session() -> requests.Session:
 
     logging.info("Fetching new Ryanair session cookies...")
     start = time.time()
-    session.get("https://www.ryanair.com/ie/en", timeout=660)
+    session.get(RYANAIR_SESSION_URL, timeout=660)
     logging.info(f"Session cookies fetched in {time.time() - start:.1f}s.")
 
     try:
@@ -83,7 +61,7 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
 
     # Calculate date range: tomorrow + 3 months + 1 week buffer
     start_date = (datetime.now() + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_date = start_date + timedelta(days=3 * 30 + 7)  # ~3 months + 1 week buffer
+    end_date = start_date + timedelta(days=SCRAPE_BUFFER_DAYS)
 
     try:
         logging.info("Initialising Ryanair client...")
@@ -136,7 +114,7 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
     if unknown_airports:
         unknown_airport_details.update(unknown_airports)
         try:
-            with open(unknown_json_path, "w") as f:
+            with open(UNKNOWN_AIRPORTS_PATH, "w") as f:
                 json.dump(unknown_airport_details, f, indent=2, ensure_ascii=False)
         except Exception as e:
             logging.warning(f"Failed to save unknown airports: {e}")
@@ -146,13 +124,9 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
 
 if __name__ == "__main__":
     # Example usage (for testing purposes)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     print("Scraping flights from EIN for Ryanair...")
     test_flights = scrape_ryanair("EIN")
     for flight in test_flights[:5]:  # Print first 5 results
-        print(
-            f"{flight.destination_iata} ({flight.destination_city}, {flight.destination_country}) | "
-            f"{flight.airline} | "
-            f"{flight.departure_time.strftime('%Y-%m-%d %H:%M')} | "
-            f"€{flight.price_eur:.2f}"
-        )
+        print(flight)
     print(f"\nTotal flights found: {len(test_flights)}")
