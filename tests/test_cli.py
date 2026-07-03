@@ -6,10 +6,9 @@ from cli import (
     validate_departure_airport,
     validate_timerange,
     validate_budget,
-    parse_arguments,
-    EU_AIRPORTS,
-    MAX_TIMERANGE_MONTHS
+    parse_arguments
 )
+from config import MAX_TIMERANGE_MONTHS
 
 
 # ---------------------------

@@ -1,19 +1,15 @@
 import json
-import os
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from freezegun import freeze_time
 
 from models import Flight
-from scraper import EU_AIRPORT_DETAILS, _get_ryanair_session, scrape_ryanair
-
-
-# ---------------------------
-# Constants
-# ---------------------------
-
-FROZEN_NOW = datetime(2026, 6, 28, 17, 0, 0)
+from scraper import _get_ryanair_session, scrape_ryanair
+from config import RYANAIR_SESSION_URL, SCRAPE_BUFFER_DAYS
+from utils import EU_AIRPORT_DETAILS
+from conftest import FROZEN_NOW
 
 
 # ---------------------------
@@ -64,7 +60,7 @@ def mock_unknown_airports_file(mocker, tmp_path):
     Patches unknown_airports.json path to a temp file to avoid polluting the real file.
     """
     unknown_path = tmp_path / "unknown_airports.json"
-    mocker.patch("scraper.unknown_json_path", str(unknown_path))
+    mocker.patch("scraper.UNKNOWN_AIRPORTS_PATH", str(unknown_path))
     mocker.patch("scraper.unknown_airport_details", {})
     return unknown_path
 
@@ -107,7 +103,7 @@ def test_get_ryanair_session_fetches_new_if_expired(mocker, tmp_path):
     mock_get = mocker.patch("requests.Session.get")
     _get_ryanair_session()
 
-    mock_get.assert_called_once_with("https://www.ryanair.com/ie/en", timeout=660)
+    mock_get.assert_called_once_with(RYANAIR_SESSION_URL, timeout=660)
 
 
 def test_get_ryanair_session_fetches_new_if_no_cache(mocker, tmp_path):
@@ -120,7 +116,7 @@ def test_get_ryanair_session_fetches_new_if_no_cache(mocker, tmp_path):
     mock_get = mocker.patch("requests.Session.get")
     _get_ryanair_session()
 
-    mock_get.assert_called_once_with("https://www.ryanair.com/ie/en", timeout=660)
+    mock_get.assert_called_once_with(RYANAIR_SESSION_URL, timeout=660)
 
 
 def test_get_ryanair_session_saves_cookies_to_cache(mocker, tmp_path):
@@ -186,7 +182,7 @@ def test_scrape_ryanair_skips_unknown_airports(mock_ryanair_api, mock_unknown_ai
     assert unknown["XYZ"]["city"] == "Unknown City"
 
 
-def test_scrape_ryanair_returns_empty_list_on_api_failure(mock_ryanair_api, mock_unknown_airports_file):
+def test_scrape_ryanair_returns_empty_list_on_api_failure(mock_ryanair_api):
     """
     Tests that an empty list is returned gracefully when the Ryanair API raises an exception.
     """
@@ -197,7 +193,7 @@ def test_scrape_ryanair_returns_empty_list_on_api_failure(mock_ryanair_api, mock
     assert result == []
 
 
-def test_scrape_ryanair_handles_malformed_destination_full(mock_ryanair_api, mock_unknown_airports_file):
+def test_scrape_ryanair_handles_malformed_destination_full(mock_ryanair_api):
     """
     Tests that a flight with a malformed destinationFull string falls back to eu_airports.json values.
     """
@@ -214,15 +210,10 @@ def test_scrape_ryanair_handles_malformed_destination_full(mock_ryanair_api, moc
     assert result[0].destination_country == EU_AIRPORT_DETAILS["STN"]["country"]
 
 
-def test_scrape_ryanair_date_range_is_correct(mock_ryanair_api, mock_unknown_airports_file, mocker):
+def test_scrape_ryanair_date_range_is_correct(mock_ryanair_api):
     """
     Tests that the date range passed to the API covers tomorrow to ~3 months + 1 week.
     """
-    mocker.patch("scraper.datetime", wraps=datetime)
-    import scraper
-
-    scraper.datetime = MagicMock(wraps=datetime)
-    scraper.datetime.now.return_value = FROZEN_NOW
     mock_ryanair_api.get_cheapest_flights.return_value = []
 
     scrape_ryanair("EIN")
@@ -232,7 +223,7 @@ def test_scrape_ryanair_date_range_is_correct(mock_ryanair_api, mock_unknown_air
     date_to = call_kwargs.kwargs.get("date_to") or call_kwargs.args[2]
 
     expected_start = (FROZEN_NOW + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    expected_end = expected_start + timedelta(days=3 * 30 + 7)
+    expected_end = expected_start + timedelta(days=SCRAPE_BUFFER_DAYS)
 
     assert date_from == expected_start
     assert date_to == expected_end
