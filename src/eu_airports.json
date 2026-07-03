@@ -471,6 +471,10 @@
     "city": "Pula",
     "country": "Croatia"
   },
+  "REU": {
+    "city": "Barcelona Reus",
+    "country": "Spain"
+  },
   "RIX": {
     "city": "Riga",
     "country": "Latvia"
@@ -494,6 +498,10 @@
   "SDR": {
     "city": "Santander",
     "country": "Spain"
+  },
+  "SKG": {
+    "city": "Thessaloniki",
+    "country": "Greece"
   },
   "SNN": {
     "city": "Shannon",
@@ -519,6 +527,10 @@
     "city": "Stavanger",
     "country": "Norway"
   },
+  "SVQ": {
+    "city": "Seville",
+    "country": "Spain"
+  },
   "SXB": {
     "city": "Strasbourg",
     "country": "France"
@@ -526,6 +538,14 @@
   "SZG": {
     "city": "Salzburg",
     "country": "Austria"
+  },
+  "TFS": {
+    "city": "Tenerife South",
+    "country": "Spain"
+  },
+  "TIA": {
+    "city": "Tirana",
+    "country": "Albania"
   },
   "TLL": {
     "city": "Tallinn",

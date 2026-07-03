@@ -2,7 +2,13 @@
 __pycache__/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 .venv/
 *.pyc
+
+# Cache files
+cache/
 .ryanair_cookies.json
-unknown_airports.json
+
+# Unknown airports (reviewed and merged manually into eu_airports.json)
+src/unknown_airports.json

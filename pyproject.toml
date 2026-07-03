@@ -9,6 +9,7 @@ description = "CLI tool for searching flights"
 requires-python = ">=3.12"
 dependencies = [
     "ryanair-py==3.0.0",
+    "rich>=14.3.2",
 ]
 
 [project.optional-dependencies]
