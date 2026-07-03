@@ -14,17 +14,23 @@ See ARCHITECTURE.md for full design decisions.
 
 ## Tech Stack
 
-| Layer         | Technology     | Version |
-|---------------|----------------|---------|
-| Language      | Python         | 3.12+   |
-| HTTP client   | ryanair-py     | 3.0.0   |
-| HTML parser   | beautifulsoup4 | latest  |
-| HTTP          | requests       | latest  |
-| Table display | rich           | latest  |
-| Test runner   | pytest         | latest  |
-| Linter        | ruff           | latest  |
-| Formatter     | ruff format    | latest  |
-| Env manager   | uv             | latest  |
+| Layer           | Technology   | Version |
+|-----------------|--------------|---------|
+| Language        | Python       | 3.12+   |
+| Ryanair client  | ryanair-py   | 3.0.0   |
+| HTTP            | requests     | latest  |
+| Table display   | rich         | latest  |
+| Test runner     | pytest       | latest  |
+| Linter          | ruff         | latest  |
+| Formatter       | ruff format  | latest  |
+| Env manager     | uv           | latest  |
+
+**Future (not yet active):**
+
+| Layer           | Technology     | Notes                                  |
+|-----------------|----------------|----------------------------------------|
+| HTML parser     | beautifulsoup4 | For scraping easyJet, Wizz Air, etc.   |
+| Browser scraper | playwright     | For JS-heavy airline sites             |
 
 ## Setup & Commands
 
@@ -56,25 +62,34 @@ uv run mypy src/
 ```
 /
 ├── src/
-│   ├── __init__.py             # Package marker — do not modify
-│   ├── flight_search.py        # Entry point — orchestrates all modules
-│   ├── cli.py                  # Argument parsing and validation
-│   ├── models.py               # Shared data model — Flight dataclass
-│   ├── cache.py                # Read/write local JSON cache
-│   ├── scraper.py              # Scrape budget airline sites
-│   ├── display.py              # Format and print results as table
-│   ├── eu_airports.json        # Static IATA to city/country lookup
-│   └── unknown_airports.json   # Auto-generated — unknown IATA codes discovered during scraping
-├── tests/                      # pytest tests — mirrors src/ structure
+│   ├── __init__.py              # Package marker — do not modify
+│   ├── flight_search.py         # Entry point — orchestrates all modules
+│   ├── cli.py                   # Argument parsing and validation
+│   ├── config.py                # All constants (cache, scraping, CLI, paths)
+│   ├── models.py                # Shared data model — Flight dataclass
+│   ├── utils.py                 # Shared helpers — airport data loading
+│   ├── cache.py                 # Read/write local JSON cache
+│   ├── scraper.py               # Scrape budget airline sites
+│   ├── display.py               # Format and print results as table
+│   ├── eu_airports.json         # Static IATA to city/country lookup
+│   └── unknown_airports.json    # Auto-generated — unknown IATA codes discovered during scraping
+├── tests/
+│   ├── conftest.py              # Shared fixtures, constants and helpers
 │   ├── test_cli.py
 │   ├── test_cache.py
 │   ├── test_scraper.py
-│   └── test_display.py
-├── cache/                      # Auto-generated cache files (gitignored)
+│   ├── test_display.py
+│   └── test_flight_search.py
+├── cache/                       # Auto-generated cache files (gitignored)
 ├── ARCHITECTURE.md
 ├── AGENTS.md
 └── pyproject.toml
 ```
+
+Auto-generated files — do not commit:
+- `cache/` — flight data cache
+- `src/.ryanair_cookies.json` — Ryanair session cookie cache
+- `src/unknown_airports.json` — airports discovered during scraping, review and merge into `eu_airports.json`
 
 Do not edit files under `dist/`, `build/`, or `generated/` — they are auto-generated.
 
@@ -106,7 +121,7 @@ Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight objects seriali
 - Confirm scope before writing code when the task is ambiguous.
 - Make the smallest change that satisfies acceptance criteria.
 - Do not introduce new dependencies without asking first.
-- Do NOT use playwright, selenium, or any browser automation — use HTTP libraries only.
+- Do NOT use playwright, selenium, or any browser automation — use HTTP libraries only (until playwright is explicitly activated for future airlines).
 - Use pytest only — never use unittest.
 - Use type hints on all functions.
 - Add docstrings on all public methods.

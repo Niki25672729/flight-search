@@ -31,7 +31,7 @@ def filter_flights(flights: list[Flight], timerange_days: int, budget: int) -> l
             for flight in flights
             if flight.price_eur <= budget and now <= flight.departure_time <= cutoff
         ],
-        key=lambda f: f.price_eur,
+        key=lambda f: (f.destination_country, f.destination_city, f.departure_time)
     )
 
 
