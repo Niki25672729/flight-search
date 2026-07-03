@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pytest
 from freezegun import freeze_time
 
-from cache import CACHE_DIR, FILENAME_REGEX, read_cache, write_cache
+from cache import CACHE_DIR, FILENAME_REGEX, read_cache, write_cache, _serialize_datetime
 from config import CACHE_TTL, DATE_FORMAT
 from models import Flight
 from conftest import FROZEN_NOW, SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS, make_dummy_flight
@@ -15,7 +15,6 @@ from conftest import FROZEN_NOW, SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS, make_dumm
 # ---------------------------
 # Fixtures
 # ---------------------------
-
 
 @pytest.fixture(scope="function")
 def tmp_cache_dir(tmp_path, mocker):
@@ -34,22 +33,10 @@ def tmp_cache_dir(tmp_path, mocker):
         Helper to create a mock cache file with specific content and timestamp in the
         temporary cache directory managed by the fixture.
         """
-        serializable_content = [
-            {
-                "destination_iata": flight.destination_iata,
-                "destination_city": flight.destination_city,
-                "destination_country": flight.destination_country,
-                "airline": flight.airline,
-                "departure_time": flight.departure_time.isoformat() if flight.departure_time else None,
-                "arrival_time": flight.arrival_time.isoformat() if flight.arrival_time else None,
-                "price_eur": flight.price_eur,
-            }
-            for flight in content
-        ]
         filename = f"{airport}_{timestamp.strftime(DATE_FORMAT)}.json"
         filepath = os.path.join(str(test_dir), filename)
         with open(filepath, "w") as f:
-            json.dump(serializable_content, f)
+            json.dump(content, f, default=_serialize_datetime)
         return filepath
 
     yield str(test_dir), create_mock_cache_file
