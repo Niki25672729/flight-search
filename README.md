@@ -67,10 +67,6 @@ uv sync --extra dev
 
 > Requires [uv](https://docs.astral.sh/uv/). Install with `pip install uv` if needed.
 
-**3. Get a free Gemini API key**
-
-Not required — this tool does not use an AI API. Skip this step.
-
 ---
 
 ## Setup
