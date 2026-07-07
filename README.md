@@ -1,6 +1,6 @@
 # ✈️ flight-search
 
-A Python CLI tool that finds budget flights from a European airport within your time range and budget. Results are scraped from Ryanair, cached locally for 1 week, and displayed as a colour-coded terminal table.
+A Python CLI tool that finds budget flights from a European airport within your time range and budget. Results are scraped from Ryanair, cached daily, and displayed as a colour-coded terminal table.
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue) ![License](https://img.shields.io/badge/License-MIT-green) ![Ryanair](https://img.shields.io/badge/Airline-Ryanair-orange)
 
@@ -32,10 +32,23 @@ A Python CLI tool that finds budget flights from a European airport within your 
 ## Features
 
 - **Simple CLI** — one command, three optional arguments
-- **Smart caching** — scrapes once, caches for 1 week; instant results on repeat runs
+- **Smart caching** — scrapes once per day, checking GCS first then falling back to a local cache; instant results on repeat same-day runs
 - **Budget + timerange filtering** — only shows flights that fit your constraints, sorted by price
 - **Colour-coded table** — easy to scan in the terminal via `rich`
 - **Unknown airport discovery** — new airports found during scraping are logged for review
+
+---
+
+## Data Source & Responsible Use
+
+This tool uses Ryanair's internal "cheapest fares" API (`/farfnd/v4/oneWayFares`, via the [`ryanair-py`](https://github.com/cohaolain/ryanair-py) library), the same undocumented endpoint their own website calls in the browser to power fare search. There is no official public Ryanair API, so this is disclosed here upfront rather than left for someone to discover on their own:
+
+- **Undocumented, unofficial endpoint.** No SLA, no versioning guarantees, and no notice if the response shape changes. This project is built and shared for educational / personal-portfolio purposes, not commercial use.
+- **Rate-limited by design.** `ryanair-py` retries transient failures with exponential backoff internally, and this project adds its own pacing delay between requests, staying well under anything resembling aggressive polling; every response is cached locally (see [Caching](#caching)) so repeat runs don't re-hit the API at all.
+- **`robots.txt`-aware.** Scraping behaviour respects `ryanair.com`'s `robots.txt` directives where they apply to the endpoints used.
+- **Not affiliated with Ryanair.** All trademarks belong to their respective owners; this is an independent, unofficial tool.
+
+If you fork or run this yourself, please keep request frequency low and cache aggressively — both to stay respectful of Ryanair's infrastructure and to keep the tool from getting your IP throttled or blocked.
 
 ---
 
@@ -71,9 +84,7 @@ uv sync --extra dev
 
 ## Setup
 
-Get a free Ryanair session — no API key needed. The tool automatically fetches a session cookie on first run.
-
-> ⚠️ First run may take up to 10 minutes while fetching the Ryanair session cookie. Subsequent runs within 1 hour use the cached cookie and are instant.
+No API key or account needed — the tool queries Ryanair's public fare-search endpoint directly via the [`ryanair-py`](https://github.com/cohaolain/ryanair-py) library.
 
 ---
 
@@ -86,7 +97,7 @@ python src/flight_search.py [departure_airport] [timerange] [budget]
 | Argument            | Format                     | Examples            | Default |
 |---------------------|----------------------------|---------------------|---------|
 | `departure_airport` | IATA code (EU only)        | `EIN`, `AMS`, `LHR` | `EIN`   |
-| `timerange`         | `{n}d` / `{n}w` / `{n}m`  | `3d`, `2w`, `1m`    | `1m`    |
+| `timerange`         | `{n}d` / `{n}w` / `{n}m`   | `3d`, `2w`, `1m`    | `1m`    |
 | `budget`            | Integer (euros)            | `50`, `100`         | `50`    |
 
 **Examples:**
@@ -106,9 +117,9 @@ python src/flight_search.py LHR 3m 100
 ## How It Works
 
 1. CLI arguments are parsed and validated (`cli.py`)
-2. Local cache is checked for this departure airport (`cache.py`)
-3. **Cache hit** → load flights instantly from `cache/{airport}_{YYYYMMDD}.json`
-4. **Cache miss** → scrape Ryanair for all flights in the next 3 months + 1 week buffer (`scraper.py`), save to cache
+2. Cache is checked for this departure airport (`cache.py`) — GCS first, falling back to the local cache if GCS is unreachable
+3. **Cache hit** → load flights instantly from today's cached data
+4. **Cache miss** → scrape Ryanair for the cheapest fare per destination, per day, across the next 3 months + 1 week buffer (`scraper.py`), save to cache
 5. Filter by timerange and budget, sort by price (`flight_search.py`)
 6. Display results as a colour-coded terminal table (`display.py`)
 
@@ -136,8 +147,9 @@ python src/flight_search.py LHR 3m 100
 │   ├── test_scraper.py
 │   ├── test_display.py
 │   └── test_flight_search.py
-├── ARCHITECTURE.md           # System design and decisions
-├── AGENTS.md                 # AI agent guide
+├── ARCHITECTURE.md           # v1 system design and decisions
+├── ARCHITECTURE_PIPELINE.md  # v2 pipeline design and decisions
+├── CLAUDE.md                 # AI agent guide
 ├── pyproject.toml
 └── uv.lock                   # Pinned dependency versions — do not edit manually
 ```
@@ -164,10 +176,40 @@ uv run mypy src/
 
 ## Caching
 
-- Flight data is cached in `cache/{airport}_{YYYYMMDD}.json`
-- Cache TTL is **1 week** — after that, a fresh scrape is triggered automatically
-- Ryanair session cookies are cached in `src/.ryanair_cookies.json` for **1 hour**
-- Both cache files are gitignored
+- The CLI checks Google Cloud Storage first (shared with the v2 pipeline below); if GCS is unreachable, it falls back automatically to a local cache at `cache/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json` — see [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md)'s "Shared GCS Cache Convention"
+- Cache TTL is **1 day** — scraping runs daily, so a fresh scrape is triggered once per calendar day
+- Local cache files are gitignored
+
+---
+
+## Roadmap: v2 — Data Engineering Pipeline
+
+v1 is the CLI tool documented above, and it **stays fully functional** — v2 is additive, not a replacement. The same repo grows a pipeline and dashboard layer on top of the existing scraper, chosen to run entirely on free tiers / free trial credit:
+
+```
+src/                    # existing v1 CLI + shared core lib (scraper, cache, models) — unchanged, imported by the pipeline
+pipeline/
+  ingestion/            # scheduled scrape → bronze (raw JSON in GCS)
+  transform/            # PySpark jobs: bronze → silver (clean, dedupe, type)
+  dbt/                  # dbt Core project: silver → gold (star schema, tests, docs)
+  orchestration/        # Airflow DAG — runs locally via Docker Compose (or Cloud Composer trial)
+dashboards/
+  powerbi/              # Power BI Desktop dashboard on top of gold tables
+```
+
+| Stage        | Tool                         | Free tier / trial                           |
+|--------------|------------------------------|---------------------------------------------|
+| Ingestion    | Existing scraper, scheduled  | Triggered by the Airflow DAG                |
+| Landing      | Google Cloud Storage         | 5 GB free tier                              |
+| Processing   | PySpark on Databricks CE     | Databricks Community Edition — free forever |
+| Warehouse    | BigQuery                     | 10 GB storage + 1 TB queries/month free     |
+| Transform    | dbt Core                     | Open source, free                           |
+| Dashboard    | Power BI Desktop             | Free to build; publishing is a manual export|
+| Orchestration| Apache Airflow               | Self-hosted via Docker Compose (free); optional short-lived Cloud Composer run on GCP trial credit |
+
+See [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md) for the full v2 design, component responsibilities, and the trade-offs behind each choice — kept as its own document, separate from `ARCHITECTURE.md` (v1), so the two systems stay easy to reason about independently.
+
+Status: 🔜 in progress.
 
 ---
 
