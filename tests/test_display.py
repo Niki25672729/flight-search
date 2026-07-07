@@ -1,16 +1,13 @@
-from datetime import datetime
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from conftest import FROZEN_NOW, SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN, make_dummy_flight
+from conftest import SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN, make_dummy_flight
 from display import display_flights
-from models import Flight
 
 
 # ---------------------------
 # Fixtures
 # ---------------------------
+
 
 @pytest.fixture
 def mock_console(mocker):
@@ -21,6 +18,7 @@ def mock_console(mocker):
 # ---------------------------
 # Tests for display_flights
 # ---------------------------
+
 
 def test_display_flights_empty_list(mock_console):
     """Tests that a friendly message is shown when no flights are provided."""
@@ -51,10 +49,7 @@ def test_display_flights_multiple_flights(mock_console):
 
 def test_display_flights_hides_arrival_time_column_when_all_none(mock_console):
     """Tests that the Arrival Time column is hidden when all flights have arrival_time=None."""
-    flights = [
-        make_dummy_flight("BCN"),
-        make_dummy_flight("AMS"),
-    ]
+    flights = [make_dummy_flight("BCN"), make_dummy_flight("AMS")]
 
     display_flights(flights)
 
@@ -67,7 +62,7 @@ def test_display_flights_shows_arrival_time_column_when_any_set(mock_console):
     """Tests that the Arrival Time column is shown when at least one flight has arrival_time set."""
     flights = [
         make_dummy_flight("BCN"),  # arrival_time=None
-        SAMPLE_FLIGHT_AMS,         # arrival_time set
+        SAMPLE_FLIGHT_AMS,  # arrival_time set
     ]
 
     display_flights(flights)
@@ -81,18 +76,23 @@ def test_display_flights_shows_na_for_missing_arrival_time(mock_console):
     """Tests that N/A is shown for flights without arrival_time when column is visible."""
     flights = [
         make_dummy_flight("BCN"),  # arrival_time=None — should show N/A
-        SAMPLE_FLIGHT_AMS,         # arrival_time set
+        SAMPLE_FLIGHT_AMS,  # arrival_time set
     ]
 
     display_flights(flights)
 
     table = mock_console.print.call_args[0][0]
-    # Find the Arrival Time column index
     column_names = [col.header for col in table.columns]
+    destination_col_idx = column_names.index("Destination")
     arrival_col_idx = column_names.index("Arrival Time")
-    # First row (dummy flight) should have N/A in arrival time column
-    first_row_cells = table.columns[arrival_col_idx]._cells
-    assert first_row_cells[0] == "N/A"
+
+    # display_flights sorts rows by country/city/time, so locate the dummy
+    # flight's row by its destination cell rather than assuming input order.
+    destination_cells = table.columns[destination_col_idx]._cells
+    dummy_row_idx = destination_cells.index("BCN, Unknown, Unknown")
+
+    arrival_cells = table.columns[arrival_col_idx]._cells
+    assert arrival_cells[dummy_row_idx] == "N/A"
 
 
 def test_display_flights_destination_format(mock_console):

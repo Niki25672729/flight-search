@@ -6,11 +6,14 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
-from models import Flight
-from config import CACHE_DIR, CACHE_TTL, DATE_FORMAT
+from google.cloud import storage
 
-# Regex to match cache filenames: {airport}_{YYYYMMDD}.json
-FILENAME_REGEX = re.compile(r"^([A-Z]{3})_(\d{8})\.json$")
+from models import Flight
+from config import CACHE_TTL, DATE_FORMAT, GCS_BUCKET_NAME, LOCAL_FLIGHT_CACHE_DIR
+from utils import _utc_now
+
+# Regex to match local flight cache filenames: {YYYYMMDD}.json
+FILENAME_REGEX = re.compile(r"^(\d{8})\.json$")
 
 
 def _serialize_datetime(obj: object) -> str | dict[str, Any]:
@@ -26,10 +29,10 @@ def _deserialize_flight_data(data: list[dict]) -> list[Flight]:
     """Deserializes datetime strings back to datetime objects and converts dicts to Flight objects."""
     deserialized_flights: list[Flight] = []
     for flight_dict in data:
-        if "departure_time" in flight_dict and isinstance(flight_dict["departure_time"], str):
-            flight_dict["departure_time"] = datetime.fromisoformat(flight_dict["departure_time"])
-        if "arrival_time" in flight_dict and isinstance(flight_dict["arrival_time"], str):
-            flight_dict["arrival_time"] = datetime.fromisoformat(flight_dict["arrival_time"])
+        for field_name in ("departure_time", "arrival_time", "scraped_at"):
+            value = flight_dict.get(field_name)
+            if isinstance(value, str):
+                flight_dict[field_name] = datetime.fromisoformat(value).replace(tzinfo=None)
         deserialized_flights.append(Flight(**flight_dict))
     return deserialized_flights
 
@@ -45,75 +48,58 @@ def _delete_file(filepath: str, description: str):
         logging.error(f"Error deleting {description} file {os.path.basename(filepath)}: {e}")
 
 
-def read_cache(departure_airport: str) -> list[Flight] | None:
+def _read_local_cache(departure_airport: str, airline: str) -> list[Flight] | None:
     """
-    Reads cached flight data for a given departure airport.
+    Reads cached flight data for a given departure airport/airline from local.
     Returns a list of Flight objects on cache hit, None on cache miss or expiry.
-    Deletes stale, corrupt, or malformed cache files.
+    Broken files (malformed filename/date, corrupt content) are deleted.
     """
-    cache_path = os.path.join(os.getcwd(), CACHE_DIR)
+    now = _utc_now()
+    cache_path = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=now.strftime("%Y%m"))
     if not os.path.exists(cache_path):
-        logging.warning(f"Cache miss for {departure_airport}: Cache directory '{CACHE_DIR}' does not exist.")
+        logging.warning(f"Cache miss for {airline}/{departure_airport}: no cache directory found.")
         return None
-
-    now = datetime.now()
 
     freshest_valid_filepath: str | None = None
     freshest_valid_file_date: datetime | None = None
 
-    # Iterate through all files in the cache directory
     for filename in os.listdir(cache_path):
         filepath = os.path.join(cache_path, filename)
         match = FILENAME_REGEX.match(filename)
 
-        if match:  # Filename matches the expected pattern {airport}_{YYYYMMDD}.json
-            file_iata_code, date_str = match.groups()
-
-            if file_iata_code == departure_airport:  # File is for the current departure airport
-                try:
-                    # Attempt to parse the date from the filename
-                    file_date = datetime.strptime(date_str, DATE_FORMAT)
-
-                    # Check if the file is fresh (within CACHE_TTL)
-                    if (now - file_date) < CACHE_TTL:
-                        # If this file is newer than the current freshest_valid_file_date,
-                        # or if no freshest_valid_file_date has been found yet
-                        if freshest_valid_file_date is None or file_date > freshest_valid_file_date:
-                            # If we previously found a fresh file, it is now superseded; delete it.
-                            if freshest_valid_filepath and os.path.exists(freshest_valid_filepath):
-                                _delete_file(freshest_valid_filepath, "older fresh cache file")
-
-                            # Update to consider this file as the new freshest valid one
-                            freshest_valid_filepath = filepath
-                            freshest_valid_file_date = file_date
-                        else:
-                            # This fresh file is older than the current freshest_valid_file_date; delete it.
-                            _delete_file(filepath, "older fresh cache file")
-                    else:
-                        # File is stale, delete it
-                        _delete_file(filepath, "stale cache file")
-
-                except ValueError:
-                    # Date part of the filename is malformed
-                    logging.warning(
-                        f"Warning: Malformed date '{date_str}' in cache filename for {departure_airport}: {filename}."
-                    )
-                    # Attempt to delete the malformed file
-                    _delete_file(filepath, "malformed date cache file")
-            # Else (file_iata_code != departure_airport), it's for another airport; ignore it.
-        else:  # Filename does not match FILENAME_REGEX — seems to be for this airport but malformed
-            if filename.startswith(f"{departure_airport}_") and filename.endswith(".json"):
+        if match:  # Filename matches the expected pattern {YYYYMMDD}.json
+            date_str = match.group(1)
+            try:
+                # Attempt to parse the date from the filename
+                file_date = datetime.strptime(date_str, DATE_FORMAT)
+            except ValueError:
+                # Date part of the filename is malformed — broken, delete it
                 logging.warning(
-                    f"Warning: Malformed filename (not {DATE_FORMAT} format) for {departure_airport}: {filename}."
+                    f"Warning: Malformed date '{date_str}' in cache filename for {airline}/{departure_airport}: "
+                    f"{filename}."
                 )
-                _delete_file(filepath, "malformed cache filename file")
+                _delete_file(filepath, "malformed date cache file")
+                continue
+
+            # Check if the file is fresh (within CACHE_TTL)
+            if (now - file_date) < CACHE_TTL:
+                if freshest_valid_file_date is None or file_date > freshest_valid_file_date:
+                    freshest_valid_filepath = filepath
+                    freshest_valid_file_date = file_date
+        else:  # Filename does not match FILENAME_REGEX — malformed
+            logging.warning(
+                f"Warning: Malformed filename (not {DATE_FORMAT} format) for {airline}/{departure_airport}: {filename}."
+            )
+            _delete_file(filepath, "malformed cache filename file")
 
     # After iterating through all files, attempt to load the freshest valid one found
     if freshest_valid_filepath:
         try:
             with open(freshest_valid_filepath, "r") as f:
                 data = json.load(f)
-            logging.info(f"Cache hit for {departure_airport}: Loaded {os.path.basename(freshest_valid_filepath)}")
+            logging.info(
+                f"Cache hit for {airline}/{departure_airport}: Loaded {os.path.basename(freshest_valid_filepath)}"
+            )
             return _deserialize_flight_data(data)
         except Exception as e:
             # Catch JSONDecodeError specifically, and other read errors
@@ -122,37 +108,109 @@ def read_cache(departure_airport: str) -> list[Flight] | None:
             _delete_file(freshest_valid_filepath, f"{error_type} cache file")
             return None
     else:
-        logging.warning(f"Cache miss for {departure_airport}: No fresh cache found after checking and cleanup.")
+        logging.warning(f"Cache miss for {airline}/{departure_airport}: No fresh cache found.")
         return None
 
 
-def write_cache(departure_airport: str, flights: list[Flight]):
+def _write_local_cache(departure_airport: str, airline: str, flights: list[Flight]):
     """
-    Writes flight data to a new cache file and removes all previous cache files
-    for the same departure airport.
+    Writes flight data to a new dated cache file for the departure airport/airline to local.
+    Malformed filenames in this month's directory are cleaned up.
     """
-    cache_path = os.path.join(os.getcwd(), CACHE_DIR)
+    now = _utc_now()
+    cache_path = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=now.strftime("%Y%m"))
     os.makedirs(cache_path, exist_ok=True)
 
-    # Clean up existing cache files for this airport
+    # Clean up malformed cache filenames in this month's directory
     for filename in os.listdir(cache_path):
-        match = FILENAME_REGEX.match(filename)
-        if match:
-            iata_code, _ = match.groups()
-            if iata_code == departure_airport:
-                _delete_file(os.path.join(cache_path, filename), "old cache file")
-        elif filename.startswith(f"{departure_airport}_") and filename.endswith(".json"):
-            # Also clean up any malformed files that match the airport prefix but not FILENAME_REGEX
-            _delete_file(os.path.join(cache_path, filename), f"malformed cache filename file for {departure_airport}")
+        if not FILENAME_REGEX.match(filename) and filename.endswith(".json"):
+            _delete_file(
+                os.path.join(cache_path, filename), f"malformed cache filename file for {airline}/{departure_airport}"
+            )
 
     # Create new cache file
-    current_date_str = datetime.now().strftime(DATE_FORMAT)
-    new_filename = f"{departure_airport}_{current_date_str}.json"
+    current_date_str = now.strftime(DATE_FORMAT)
+    new_filename = f"{current_date_str}.json"
     new_filepath = os.path.join(cache_path, new_filename)
 
     try:
         with open(new_filepath, "w") as f:
             json.dump(flights, f, default=_serialize_datetime, indent=4)
-        logging.info(f"Cache written to {new_filename}")
+        logging.info(f"Cache written to {airline}/{departure_airport}/{now.strftime('%Y%m')}/{new_filename}")
     except Exception as e:
         logging.error(f"Error writing cache to {new_filename}: {e}")
+
+
+def _get_gcs_bucket() -> storage.Bucket:
+    """
+    PLACEHOLDER: Returns the GCS bucket client.
+    """
+    if not GCS_BUCKET_NAME:
+        raise RuntimeError("GCS_BUCKET_NAME is not configured")
+    return storage.Client().bucket(GCS_BUCKET_NAME)
+
+
+def _gcs_flight_blob_name(departure_airport: str, airline: str, date: datetime) -> str:
+    return f"bronze/flights/{airline}/{departure_airport}/{date.strftime(DATE_FORMAT)}.json"
+
+
+def _read_gcs_cache(departure_airport: str, airline: str) -> list[Flight] | None:
+    """
+    PLACEHOLDER: Checks GCS for the freshest flight blob (within CACHE_TTL) for this airport.
+    """
+    bucket = _get_gcs_bucket()
+    prefix = f"bronze/flights/{airline}/{departure_airport}/"
+    now = _utc_now()
+
+    freshest_blob = None
+    freshest_date: datetime | None = None
+    for blob in bucket.list_blobs(prefix=prefix):
+        filename = blob.name.rsplit("/", 1)[-1].removesuffix(".json")
+        try:
+            blob_date = datetime.strptime(filename, DATE_FORMAT)
+        except ValueError:
+            continue
+        if (now - blob_date) < CACHE_TTL and (freshest_date is None or blob_date > freshest_date):
+            freshest_blob, freshest_date = blob, blob_date
+
+    if freshest_blob is None:
+        logging.info(f"GCS cache miss for {airline}/{departure_airport}: no fresh blob under {prefix}.")
+        return None
+
+    data = [json.loads(line) for line in freshest_blob.download_as_text().splitlines() if line.strip()]
+    logging.info(f"GCS cache hit for {airline}/{departure_airport}: loaded {freshest_blob.name}")
+    return _deserialize_flight_data(data)
+
+
+def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]) -> None:
+    """
+    PLACEHOLDER: Writes flights as NDJSON (one record per line) to today's GCS blob for this
+    airport.
+    """
+    bucket = _get_gcs_bucket()
+    blob_name = _gcs_flight_blob_name(departure_airport, airline, _utc_now())
+    lines = "\n".join(json.dumps(flight, default=_serialize_datetime) for flight in flights)
+    bucket.blob(blob_name).upload_from_string(lines, content_type="application/x-ndjson")
+    logging.info(f"GCS cache written to {blob_name}")
+
+
+def read_cache(departure_airport: str, airline: str) -> list[Flight] | None:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        return _read_gcs_cache(departure_airport, airline)
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline}/{departure_airport} ({e}); falling back to local cache.")
+        return _read_local_cache(departure_airport, airline)
+
+
+def write_cache(departure_airport: str, airline: str, flights: list[Flight]) -> None:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        _write_gcs_cache(departure_airport, airline, flights)
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline}/{departure_airport} ({e}); falling back to local cache.")
+        _write_local_cache(departure_airport, airline, flights)

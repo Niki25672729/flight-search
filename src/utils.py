@@ -1,12 +1,23 @@
 import json
 import logging
+from datetime import datetime, timezone
 
-from config import EU_AIRPORTS_PATH, UNKNOWN_AIRPORTS_PATH
+from config import EU_AIRPORTS_PATH, IGNORED_AIRPORTS_PATH, AMBIGUOUS_AIRPORTS_PATH, UNKNOWN_AIRPORTS_PATH
 
 
 # ---------------------------
 # Helpers
 # ---------------------------
+
+
+def _utc_now() -> datetime:
+    """
+    Returns the current time as a naive UTC datetime (tzinfo stripped, consistent
+    with the rest of the codebase's naive datetimes). Used for anything that ends up
+    in a cache filename/path or a `scraped_at` data field — using local time here
+    would make "today"/"now" depend on which timezone the process happens to run in.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _load_eu_airports() -> dict:
@@ -15,6 +26,23 @@ def _load_eu_airports() -> dict:
             return json.load(f)
     except FileNotFoundError:
         logging.error("eu_airports.json not found.")
+        return {}
+
+
+def _load_ignored_airports() -> dict:
+    try:
+        with open(IGNORED_AIRPORTS_PATH, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logging.error("ignored_airports.json not found.")
+        return {}
+
+
+def _load_ambiguous_airports() -> dict:
+    try:
+        with open(UNKNOWN_AIRPORTS_PATH, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
         return {}
 
 
@@ -32,11 +60,15 @@ def _load_unknown_airports() -> dict:
 
 EU_AIRPORT_DETAILS = _load_eu_airports()
 EU_AIRPORTS = set(EU_AIRPORT_DETAILS.keys())
+IGNORED_AIRPORT_DETAILS = _load_ignored_airports()
+IGNORED_AIRPORTS = set(IGNORED_AIRPORT_DETAILS.keys())
 
 
 # ---------------------------
 # Mutable state
 # ---------------------------
 
+# Mutable — updated at runtime when airports' city or country are different from the one in EU_AIRPORT_DETAILS
+ambiguous_airport_details = _load_ambiguous_airports()
 # Mutable — updated at runtime when new airports are discovered during scraping
 unknown_airport_details = _load_unknown_airports()

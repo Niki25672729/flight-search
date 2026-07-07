@@ -2,10 +2,11 @@ import logging
 
 from cache import read_cache, write_cache
 from cli import parse_arguments
-from datetime import datetime, timedelta
+from datetime import timedelta
 from display import display_flights
 from models import Flight
 from scraper import scrape_ryanair
+from utils import _utc_now
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -22,16 +23,12 @@ def filter_flights(flights: list[Flight], timerange_days: int, budget: int) -> l
     Returns:
         Filtered and sorted list of Flight objects.
     """
-    now = datetime.now()
+    now = _utc_now()
     cutoff = now + timedelta(days=timerange_days)
 
     return sorted(
-        [
-            flight
-            for flight in flights
-            if flight.price_eur <= budget and now <= flight.departure_time <= cutoff
-        ],
-        key=lambda f: (f.destination_country, f.destination_city, f.departure_time)
+        [flight for flight in flights if flight.price_eur <= budget and now <= flight.departure_time <= cutoff],
+        key=lambda f: (f.destination_country, f.destination_city, f.departure_time),
     )
 
 
@@ -45,12 +42,12 @@ def main() -> None:
 
     logging.info(f"Searching flights from {departure_airport} within {timerange_days} days and €{budget} budget...")
 
-    flights = read_cache(departure_airport)
+    flights = read_cache(departure_airport, "ryanair")
 
     if flights is None:
         logging.info(f"No cache found for {departure_airport}, scraping...")
         flights = scrape_ryanair(departure_airport)
-        write_cache(departure_airport, flights)
+        write_cache(departure_airport, "ryanair", flights)
 
     filtered = filter_flights(flights, timerange_days, budget)
     logging.info(f"Found {len(filtered)} flights matching criteria.")

@@ -10,5 +10,9 @@ __pycache__/
 cache/
 .ryanair_cookies.json
 
-# Unknown airports (reviewed and merged manually into eu_airports.json)
+# Ignored airports, not required
+src/ignored_airports.json
+# Ambiguous airports (reviewed and merged manually into eu_airports.json)
+src/ambiguous_airports.json
+# Unknown airports (reviewed and merged manually into eu_airports.json or ignored_airports.json)
 src/unknown_airports.json

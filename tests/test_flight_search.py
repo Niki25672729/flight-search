@@ -1,15 +1,13 @@
-from datetime import datetime, timedelta
-
 import pytest
 
-from conftest import FROZEN_NOW, SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN, make_dummy_flight
+from conftest import SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN
 from flight_search import filter_flights, main
-from models import Flight
 
 
 # ---------------------------
 # Fixtures
 # ---------------------------
+
 
 @pytest.fixture
 def mock_read_cache(mocker):
@@ -49,21 +47,12 @@ def mock_parse_arguments(mocker):
 # Tests for filter_flights
 # ---------------------------
 
+
 def test_filter_flights_within_budget_and_timerange():
     """Tests that flights within budget and timerange are returned."""
-    flights = [
-        Flight(
-            destination_iata="BCN",
-            destination_city="Barcelona",
-            destination_country="Spain",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=5),
-            arrival_time=None,
-            price_eur=40.0,
-        ),
-    ]
+    flights = [SAMPLE_FLIGHT_BCN]
 
-    result = filter_flights(flights, timerange_days=30, budget=50)
+    result = filter_flights(flights, timerange_days=30, budget=60)
 
     assert len(result) == 1
     assert result[0].destination_iata == "BCN"
@@ -71,84 +60,36 @@ def test_filter_flights_within_budget_and_timerange():
 
 def test_filter_flights_excludes_over_budget():
     """Tests that flights exceeding the budget are excluded."""
-    flights = [
-        Flight(
-            destination_iata="BCN",
-            destination_city="Barcelona",
-            destination_country="Spain",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=5),
-            arrival_time=None,
-            price_eur=100.0,
-        ),
-    ]
+    flights = [SAMPLE_FLIGHT_BCN]
 
-    result = filter_flights(flights, timerange_days=30, budget=50)
+    result = filter_flights(flights, timerange_days=30, budget=30)
 
     assert result == []
 
 
 def test_filter_flights_excludes_outside_timerange():
     """Tests that flights outside the timerange are excluded."""
-    flights = [
-        Flight(
-            destination_iata="BCN",
-            destination_city="Barcelona",
-            destination_country="Spain",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=60),
-            arrival_time=None,
-            price_eur=40.0,
-        ),
-    ]
+    flights = [SAMPLE_FLIGHT_AMS]
 
-    result = filter_flights(flights, timerange_days=30, budget=50)
+    result = filter_flights(flights, timerange_days=30, budget=250)
 
     assert result == []
 
 
-def test_filter_flights_sorted_by_price():
-    """Tests that results are sorted by price ascending."""
-    flights = [
-        Flight(
-            destination_iata="AMS",
-            destination_city="Amsterdam",
-            destination_country="Netherlands",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=5),
-            arrival_time=None,
-            price_eur=75.0,
-        ),
-        Flight(
-            destination_iata="BCN",
-            destination_city="Barcelona",
-            destination_country="Spain",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=3),
-            arrival_time=None,
-            price_eur=30.0,
-        ),
-    ]
+def test_filter_flights_sorted_by_country_city_time():
+    """Tests that results are sorted by (country, city, departure_time) ascending, per ARCHITECTURE.md."""
+    flights = [SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN]
 
-    result = filter_flights(flights, timerange_days=30, budget=100)
+    result = filter_flights(flights, timerange_days=90, budget=250)
 
-    assert result[0].destination_iata == "BCN"
-    assert result[1].destination_iata == "AMS"
+    # "Netherlands" sorts before "Spain" alphabetically, regardless of price.
+    assert result[0].destination_iata == "AMS"
+    assert result[1].destination_iata == "BCN"
 
 
 def test_filter_flights_includes_exact_budget():
     """Tests that a flight exactly at the budget limit is included."""
-    flights = [
-        Flight(
-            destination_iata="BCN",
-            destination_city="Barcelona",
-            destination_country="Spain",
-            airline="Ryanair",
-            departure_time=FROZEN_NOW + timedelta(days=5),
-            arrival_time=None,
-            price_eur=50.0,
-        ),
-    ]
+    flights = [SAMPLE_FLIGHT_BCN]
 
     result = filter_flights(flights, timerange_days=30, budget=50)
 
@@ -166,6 +107,7 @@ def test_filter_flights_empty_list():
 # Tests for main
 # ---------------------------
 
+
 def test_main_uses_cache_when_available(
     mock_parse_arguments, mock_read_cache, mock_write_cache, mock_scrape_ryanair, mock_display_flights
 ):
@@ -174,7 +116,7 @@ def test_main_uses_cache_when_available(
 
     main()
 
-    mock_read_cache.assert_called_once_with("EIN")
+    mock_read_cache.assert_called_once_with("EIN", "ryanair")
     mock_scrape_ryanair.assert_not_called()
     mock_write_cache.assert_not_called()
     mock_display_flights.assert_called_once()
@@ -190,7 +132,7 @@ def test_main_scrapes_and_caches_on_cache_miss(
     main()
 
     mock_scrape_ryanair.assert_called_once_with("EIN")
-    mock_write_cache.assert_called_once_with("EIN", [SAMPLE_FLIGHT_BCN])
+    mock_write_cache.assert_called_once_with("EIN", "ryanair", [SAMPLE_FLIGHT_BCN])
     mock_display_flights.assert_called_once()
 
 
@@ -198,25 +140,7 @@ def test_main_filters_by_budget(
     mock_parse_arguments, mock_read_cache, mock_write_cache, mock_scrape_ryanair, mock_display_flights
 ):
     """Tests that only flights within budget are passed to display."""
-    cheap_flight = Flight(
-        destination_iata="BCN",
-        destination_city="Barcelona",
-        destination_country="Spain",
-        airline="Ryanair",
-        departure_time=FROZEN_NOW + timedelta(days=5),
-        arrival_time=None,
-        price_eur=40.0,
-    )
-    expensive_flight = Flight(
-        destination_iata="AMS",
-        destination_city="Amsterdam",
-        destination_country="Netherlands",
-        airline="Ryanair",
-        departure_time=FROZEN_NOW + timedelta(days=5),
-        arrival_time=None,
-        price_eur=200.0,
-    )
-    mock_read_cache.return_value = [cheap_flight, expensive_flight]
+    mock_read_cache.return_value = [SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS]
 
     main()
 
@@ -229,25 +153,7 @@ def test_main_filters_by_timerange(
     mock_parse_arguments, mock_read_cache, mock_write_cache, mock_scrape_ryanair, mock_display_flights
 ):
     """Tests that only flights within the timerange are passed to display."""
-    near_flight = Flight(
-        destination_iata="BCN",
-        destination_city="Barcelona",
-        destination_country="Spain",
-        airline="Ryanair",
-        departure_time=FROZEN_NOW + timedelta(days=5),
-        arrival_time=None,
-        price_eur=40.0,
-    )
-    far_flight = Flight(
-        destination_iata="AMS",
-        destination_city="Amsterdam",
-        destination_country="Netherlands",
-        airline="Ryanair",
-        departure_time=FROZEN_NOW + timedelta(days=60),
-        arrival_time=None,
-        price_eur=40.0,
-    )
-    mock_read_cache.return_value = [near_flight, far_flight]
+    mock_read_cache.return_value = [SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS]
 
     main()
 
