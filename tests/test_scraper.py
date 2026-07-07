@@ -23,11 +23,25 @@ from conftest import make_ryanair_py_flight
 # ---------------------------
 
 
+@pytest.fixture(autouse=True)
+def mock_unknown_airport_details(mocker):
+    mocker.patch("scraper.unknown_airport_details", {})
+
+
+@pytest.fixture(autouse=True)
+def mock_ambiguous_airport_details(mocker):
+    mocker.patch("scraper.ambiguous_airport_details", {})
+
+
+@pytest.fixture(autouse=True)
+def mock_ignored_airports(mocker):
+    mocker.patch("scraper.IGNORED_AIRPORTS", {"XYZ"})
+
+
 @pytest.fixture
 def mock_unknown_airports_file(mocker, tmp_path):
     unknown_path = tmp_path / "unknown_airports.json"
     mocker.patch("scraper.UNKNOWN_AIRPORTS_PATH", str(unknown_path))
-    mocker.patch("scraper.unknown_airport_details", {})
     return unknown_path
 
 
@@ -35,7 +49,6 @@ def mock_unknown_airports_file(mocker, tmp_path):
 def mock_ambiguous_airports_file(mocker, tmp_path):
     ambiguous_path = tmp_path / "ambiguous_airports.json"
     mocker.patch("scraper.AMBIGUOUS_AIRPORTS_PATH", str(ambiguous_path))
-    mocker.patch("scraper.ambiguous_airport_details", {})
     return ambiguous_path
 
 
@@ -101,9 +114,8 @@ def test_extract_city_country_from_full_handles_missing_or_malformed():
 # ---------------------------
 
 
-def test_classify_route_known_airport_agrees(mocker):
+def test_classify_route_known_airport_agrees():
     """Tests that a known EU airport whose API data agrees with the static record is resolved, unlogged."""
-    mocker.patch("scraper.ambiguous_airport_details", {})
     ambiguous_found, unknown_found = {}, {}
 
     result = _classify_route("BCN", "Barcelona", "Spain", ambiguous_found, unknown_found)
@@ -112,9 +124,8 @@ def test_classify_route_known_airport_agrees(mocker):
     assert ambiguous_found == {}
 
 
-def test_classify_route_known_airport_disagrees_logs_ambiguous(mocker):
+def test_classify_route_known_airport_disagrees_logs_ambiguous():
     """Tests that a known EU airport whose API data disagrees with the static record is logged as ambiguous."""
-    mocker.patch("scraper.ambiguous_airport_details", {})
     ambiguous_found, unknown_found = {}, {}
 
     result = _classify_route("BCN", "Barna", "Spain", ambiguous_found, unknown_found)
@@ -124,9 +135,8 @@ def test_classify_route_known_airport_disagrees_logs_ambiguous(mocker):
     assert ambiguous_found == {"BCN": {"city": "Barna", "country": "Spain"}}
 
 
-def test_classify_route_falls_back_to_static_when_api_data_missing(mocker):
+def test_classify_route_falls_back_to_static_when_api_data_missing():
     """Tests that a known EU airport with no API city/country falls back to the static record."""
-    mocker.patch("scraper.ambiguous_airport_details", {})
     ambiguous_found, unknown_found = {}, {}
 
     result = _classify_route("BCN", None, None, ambiguous_found, unknown_found)
@@ -134,9 +144,8 @@ def test_classify_route_falls_back_to_static_when_api_data_missing(mocker):
     assert result == ("Barcelona", "Spain")
 
 
-def test_classify_route_ignored_airport_skipped(mocker):
+def test_classify_route_ignored_airport_skipped():
     """Tests that an ignored airport (e.g. XYZ, in ignored_airports.json) is skipped without logging."""
-    mocker.patch("scraper.unknown_airport_details", {})
     ambiguous_found, unknown_found = {}, {}
 
     result = _classify_route("XYZ", None, None, ambiguous_found, unknown_found)
@@ -145,9 +154,8 @@ def test_classify_route_ignored_airport_skipped(mocker):
     assert unknown_found == {}
 
 
-def test_classify_route_unknown_airport_logged(mocker):
+def test_classify_route_unknown_airport_logged():
     """Tests that a code in neither eu_airports.json nor ignored_airports.json is logged as unknown."""
-    mocker.patch("scraper.unknown_airport_details", {})
     ambiguous_found, unknown_found = {}, {}
 
     result = _classify_route("ZZZ", "Somewhere", "Nowhere", ambiguous_found, unknown_found)
@@ -239,6 +247,8 @@ def test_scrape_ryanair_skips_ignored_destination(mocker, mock_ryanair_client, m
     result = scrape_ryanair("EIN")
 
     assert result == []
+    # distinguishes "ignored" from "unknown" — an unknown destination would have written this file
+    assert not mock_unknown_airports_file.exists()
 
 
 def test_scrape_ryanair_logs_unknown_destination(mocker, mock_ryanair_client, mock_unknown_airports_file):

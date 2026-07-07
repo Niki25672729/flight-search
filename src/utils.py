@@ -40,7 +40,7 @@ def _load_ignored_airports() -> dict:
 
 def _load_ambiguous_airports() -> dict:
     try:
-        with open(UNKNOWN_AIRPORTS_PATH, "r") as f:
+        with open(AMBIGUOUS_AIRPORTS_PATH, "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
