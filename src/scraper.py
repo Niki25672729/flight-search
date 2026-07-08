@@ -1,11 +1,11 @@
 import json
 import logging
-import os
 import time
 from datetime import date, datetime, timedelta
 
 from ryanair import Ryanair
 
+from cache import load_retry_queue, save_retry_queue
 from models import Flight
 from config import (
     AMBIGUOUS_AIRPORTS_PATH,
@@ -13,7 +13,6 @@ from config import (
     SCRAPE_BUFFER_DAYS,
     RYANAIR_CURRENCY,
     SCRAPE_REQUEST_DELAY_SECONDS,
-    RETRY_QUEUE_PATH,
 )
 from utils import EU_AIRPORT_DETAILS, IGNORED_AIRPORTS, ambiguous_airport_details, unknown_airport_details, _utc_now
 
@@ -108,36 +107,14 @@ def _save_unknown_and_ambiguous_findings(
 # --- Retry ---
 
 
-def _load_retry_queue() -> list[dict]:
-    """Loads the queue of failed daily queries pending retry, creating an empty file if missing."""
-    if not os.path.exists(RETRY_QUEUE_PATH):
-        _save_retry_queue([])
-        return []
-    try:
-        with open(RETRY_QUEUE_PATH, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logging.warning(f"Failed to load retry queue: {e}")
-        return []
-
-
-def _save_retry_queue(queue: list[dict]) -> None:
-    try:
-        os.makedirs(os.path.dirname(RETRY_QUEUE_PATH), exist_ok=True)
-        with open(RETRY_QUEUE_PATH, "w") as f:
-            json.dump(queue, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logging.warning(f"Failed to save retry queue: {e}")
-
-
-def _record_failed_query(origin_iata: str, query_date: date) -> None:
+def _record_failed_query(origin_iata: str, query_date: date, airline: str) -> None:
     """Appends a failed daily query to the retry queue. Skips if already queued."""
-    queue = _load_retry_queue()
+    queue = load_retry_queue(airline)
     entry = {"origin_iata": origin_iata, "query_date": query_date.strftime("%Y-%m-%d")}
     if entry in queue:
         return
     queue.append(entry)
-    _save_retry_queue(queue)
+    save_retry_queue(airline, queue)
     logging.info(f"Recorded failed query {origin_iata} {entry['query_date']} for retry.")
 
 
@@ -173,7 +150,7 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
             raw_flights = client.get_cheapest_flights(origin_airport, query_date, query_date)
         except Exception as e:
             logging.warning(f"{origin_airport}: failed to fetch cheapest flights for {query_date}: {e}")
-            _record_failed_query(origin_airport, query_date)
+            _record_failed_query(origin_airport, query_date, "ryanair")
             time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
             continue
 
@@ -220,7 +197,7 @@ def retry_failed_queries() -> list[Flight]:
     scrape_ryanair when a day's cheapest-fares query still fails after ryanair-py's
     own internal retries are exhausted).
     """
-    queue = _load_retry_queue()
+    queue = load_retry_queue("ryanair")
     if not queue:
         logging.info("Retry queue is empty — nothing to retry.")
         return []
@@ -282,7 +259,7 @@ def retry_failed_queries() -> list[Flight]:
         time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
 
     _save_unknown_and_ambiguous_findings(ambiguous_found, unknown_found)
-    _save_retry_queue(still_failing)
+    save_retry_queue("ryanair", still_failing)
     logging.info(
         f"Retry complete: {len(recovered_flights)} flights recovered, {len(still_failing)} queries still failing."
     )

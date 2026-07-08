@@ -4,13 +4,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cache import load_retry_queue
 from scraper import (
     _strip_city_annotation,
     _extract_city_country_from_full,
     _classify_airport,
     _save_unknown_and_ambiguous_findings,
-    _load_retry_queue,
-    _save_retry_queue,
     _record_failed_query,
     scrape_ryanair,
     retry_failed_queries,
@@ -54,9 +53,8 @@ def mock_ambiguous_airports_file(mocker, tmp_path):
 
 @pytest.fixture
 def tmp_retry_queue_path(mocker, tmp_path):
-    path = tmp_path / "retry.json"
-    mocker.patch("scraper.RETRY_QUEUE_PATH", str(path))
-    return path
+    mocker.patch("cache.LOCAL_RETRY_QUEUE_PATH", str(tmp_path / "{airline}_retry.json"))
+    return tmp_path / "ryanair_retry.json"
 
 
 @pytest.fixture
@@ -321,7 +319,7 @@ def test_scrape_ryanair_records_failed_day_for_retry(mocker, mock_ryanair_client
     result = scrape_ryanair("EIN")
 
     assert result == []
-    queue = _load_retry_queue()
+    queue = load_retry_queue("ryanair")
     assert len(queue) == 1
     assert queue[0]["origin_iata"] == "EIN"
 
@@ -331,20 +329,9 @@ def test_scrape_ryanair_records_failed_day_for_retry(mocker, mock_ryanair_client
 # ---------------------------
 
 
-def test_load_retry_queue_creates_empty_file_if_missing(tmp_retry_queue_path):
-    """Tests that loading a missing retry queue creates an empty one and returns []."""
-    assert not tmp_retry_queue_path.exists()
-
-    result = _load_retry_queue()
-
-    assert result == []
-    assert tmp_retry_queue_path.exists()
-    assert json.loads(tmp_retry_queue_path.read_text()) == []
-
-
 def test_record_failed_query_appends_entry(tmp_retry_queue_path):
     """Tests that a failed query is appended to the retry queue with the fields needed to reissue it."""
-    _record_failed_query("EIN", date(2026, 8, 18))
+    _record_failed_query("EIN", date(2026, 8, 18), "ryanair")
 
     queue = json.loads(tmp_retry_queue_path.read_text())
     assert queue == [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
@@ -352,20 +339,16 @@ def test_record_failed_query_appends_entry(tmp_retry_queue_path):
 
 def test_record_failed_query_does_not_duplicate(tmp_retry_queue_path):
     """Tests that recording the same failed query twice doesn't create a duplicate entry."""
-    _record_failed_query("EIN", date(2026, 8, 18))
-    _record_failed_query("EIN", date(2026, 8, 18))
+    _record_failed_query("EIN", date(2026, 8, 18), "ryanair")
+    _record_failed_query("EIN", date(2026, 8, 18), "ryanair")
 
     queue = json.loads(tmp_retry_queue_path.read_text())
     assert len(queue) == 1
 
 
-def test_save_and_load_retry_queue_roundtrip(tmp_retry_queue_path):
-    """Tests that saving and reloading the retry queue preserves its content."""
-    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
-
-    _save_retry_queue(entries)
-
-    assert _load_retry_queue() == entries
+# ---------------------------
+# Tests for retry_failed_queries
+# ---------------------------
 
 
 def test_retry_failed_queries_empty_queue_returns_empty(tmp_retry_queue_path):
@@ -377,7 +360,7 @@ def test_retry_failed_queries_empty_queue_returns_empty(tmp_retry_queue_path):
 
 def test_retry_failed_queries_recovers_and_clears_queue(mocker, mock_ryanair_client, tmp_retry_queue_path):
     """Tests that a successful retry recovers flights and removes the entry from the queue."""
-    _record_failed_query("EIN", date(2026, 8, 18))
+    _record_failed_query("EIN", date(2026, 8, 18), "ryanair")
     mocker.patch("scraper.time.sleep")
     mock_ryanair_client.get_cheapest_flights.return_value = [make_ryanair_py_flight(destination="BCN")]
 
@@ -385,18 +368,18 @@ def test_retry_failed_queries_recovers_and_clears_queue(mocker, mock_ryanair_cli
 
     assert len(result) == 1
     assert result[0].destination_iata == "BCN"
-    assert _load_retry_queue() == []
+    assert load_retry_queue("ryanair") == []
 
 
 def test_retry_failed_queries_keeps_still_failing_entries(mocker, mock_ryanair_client, tmp_retry_queue_path):
     """Tests that a query that still fails on retry is kept in the queue."""
-    _record_failed_query("EIN", date(2026, 8, 18))
+    _record_failed_query("EIN", date(2026, 8, 18), "ryanair")
     mocker.patch("scraper.time.sleep")
     mock_ryanair_client.get_cheapest_flights.side_effect = Exception("still down")
 
     result = retry_failed_queries()
 
     assert result == []
-    queue = _load_retry_queue()
+    queue = load_retry_queue("ryanair")
     assert len(queue) == 1
     assert queue[0]["origin_iata"] == "EIN"

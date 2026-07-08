@@ -9,7 +9,15 @@ from typing import Any
 from google.cloud import storage
 
 from models import Flight
-from config import CACHE_TTL, DATE_FORMAT, GCS_BUCKET_NAME, CLOUD_FLIGHT_CACHE_DIR, LOCAL_FLIGHT_CACHE_DIR
+from config import (
+    CACHE_TTL,
+    DATE_FORMAT,
+    GCS_BUCKET_NAME,
+    CLOUD_FLIGHT_CACHE_DIR,
+    CLOUD_RETRY_QUEUE_PATH,
+    LOCAL_FLIGHT_CACHE_DIR,
+    LOCAL_RETRY_QUEUE_PATH,
+)
 from utils import _utc_now
 
 
@@ -219,6 +227,59 @@ def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]
 
 
 # ---------------------------
+# Retry Queue
+# ---------------------------
+
+
+# --- Local ---
+
+
+def _load_local_retry_queue(airline: str) -> list[dict]:
+    """Loads the local retry queue for this airline, creating an empty file if missing."""
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline)
+    if not os.path.exists(path):
+        _save_local_retry_queue(airline, [])
+        return []
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning(f"Failed to load local retry queue for {airline}: {e}")
+        return []
+
+
+def _save_local_retry_queue(airline: str, queue: list[dict]) -> None:
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(queue, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.warning(f"Failed to save local retry queue for {airline}: {e}")
+
+
+# --- Cloud ---
+
+
+def _load_gcs_retry_queue(airline: str) -> list[dict]:
+    """Loads the GCS retry queue blob for this airline. Returns [] if the blob doesn't exist."""
+    bucket = _get_gcs_bucket()
+    blob = bucket.blob(CLOUD_RETRY_QUEUE_PATH.format(airline=airline))
+    if not blob.exists():
+        return []
+    return json.loads(blob.download_as_text())
+
+
+def _save_gcs_retry_queue(airline: str, queue: list[dict]) -> None:
+    bucket = _get_gcs_bucket()
+    blob_name = CLOUD_RETRY_QUEUE_PATH.format(airline=airline)
+    bucket.blob(blob_name).upload_from_string(
+        json.dumps(queue, indent=2, ensure_ascii=False), content_type="application/json"
+    )
+    logging.info(f"GCS retry queue written to {blob_name}")
+
+
+# ---------------------------
 # Public API
 # ---------------------------
 
@@ -243,3 +304,25 @@ def write_cache(departure_airport: str, airline: str, flights: list[Flight]) -> 
     except Exception as e:
         logging.warning(f"GCS unreachable for {airline}/{departure_airport} ({e}); falling back to local cache.")
         _write_local_cache(departure_airport, airline, flights)
+
+
+def load_retry_queue(airline: str) -> list[dict]:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        return _load_gcs_retry_queue(airline)
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
+        return _load_local_retry_queue(airline)
+
+
+def save_retry_queue(airline: str, queue: list[dict]) -> None:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        _save_gcs_retry_queue(airline, queue)
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
+        _save_local_retry_queue(airline, queue)

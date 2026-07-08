@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cache import read_cache, write_cache, _serialize_datetime, _get_gcs_bucket
+from cache import read_cache, write_cache, load_retry_queue, save_retry_queue, _serialize_datetime, _get_gcs_bucket
 from config import DATE_FORMAT, CLOUD_FLIGHT_CACHE_DIR
 from models import Flight
 from conftest import FROZEN_NOW, SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS, make_dummy_flight
@@ -73,6 +73,13 @@ def mock_gcs_bucket(mocker):
     mock_bucket = MagicMock()
     mock_client.return_value.bucket.return_value = mock_bucket
     return mock_bucket
+
+
+@pytest.fixture
+def tmp_retry_queue_path(tmp_path, mocker):
+    """Patches cache.LOCAL_RETRY_QUEUE_PATH to a temporary location. Returns the resolved ryanair path."""
+    mocker.patch("cache.LOCAL_RETRY_QUEUE_PATH", str(tmp_path / "{airline}_retry.json"))
+    return tmp_path / "ryanair_retry.json"
 
 
 # ---------------------------
@@ -370,3 +377,94 @@ def test_write_cache_falls_back_to_local_when_gcs_unreachable(mocker, tmp_cache_
     )
     assert os.path.exists(expected_filepath)
     assert "GCS unreachable for ryanair/EIN" in caplog.text
+
+
+# ---------------------------
+# Tests for Retry Queue
+# ---------------------------
+
+
+def test_load_retry_queue_creates_empty_file_if_missing(tmp_retry_queue_path):
+    """Tests that loading a missing local retry queue creates an empty one and returns []."""
+    assert not tmp_retry_queue_path.exists()
+
+    result = load_retry_queue("ryanair")
+
+    assert result == []
+    assert tmp_retry_queue_path.exists()
+    assert json.loads(tmp_retry_queue_path.read_text()) == []
+
+
+def test_save_and_load_retry_queue_roundtrip(tmp_retry_queue_path):
+    """Tests that saving and reloading the local retry queue preserves its content."""
+    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
+
+    save_retry_queue("ryanair", entries)
+
+    assert load_retry_queue("ryanair") == entries
+
+
+def test_load_retry_queue_gcs_hit(mock_gcs_bucket):
+    """Tests that load_retry_queue reads the GCS retry queue blob when it exists."""
+    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
+    mock_blob = MagicMock()
+    mock_blob.exists.return_value = True
+    mock_blob.download_as_text.return_value = json.dumps(entries)
+    mock_gcs_bucket.blob.return_value = mock_blob
+
+    result = load_retry_queue("ryanair")
+
+    assert result == entries
+    mock_gcs_bucket.blob.assert_called_once_with("bronze/flights/ryanair/retry.json")
+
+
+def test_load_retry_queue_gcs_miss_returns_empty(mock_gcs_bucket):
+    """Tests that load_retry_queue returns [] when the GCS blob doesn't exist, without touching local."""
+    mock_blob = MagicMock()
+    mock_blob.exists.return_value = False
+    mock_gcs_bucket.blob.return_value = mock_blob
+
+    result = load_retry_queue("ryanair")
+
+    assert result == []
+
+
+def test_load_retry_queue_falls_back_to_local_when_gcs_unreachable(mocker, tmp_retry_queue_path, caplog):
+    """Tests that load_retry_queue falls back to local when GCS itself is unreachable."""
+    mocker.patch("cache.GCS_BUCKET_NAME", "test-bucket")
+    mocker.patch("cache.storage.Client", side_effect=Exception("connection refused"))
+    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
+    tmp_retry_queue_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_retry_queue_path.write_text(json.dumps(entries))
+
+    with caplog.at_level(logging.WARNING):
+        result = load_retry_queue("ryanair")
+
+    assert result == entries
+    assert "GCS unreachable for ryanair retry queue" in caplog.text
+
+
+def test_save_retry_queue_uploads_to_gcs(mock_gcs_bucket):
+    """Tests that save_retry_queue uploads the queue as JSON to the GCS retry queue blob."""
+    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
+
+    save_retry_queue("ryanair", entries)
+
+    mock_gcs_bucket.blob.assert_called_once_with("bronze/flights/ryanair/retry.json")
+    mock_blob = mock_gcs_bucket.blob.return_value
+    mock_blob.upload_from_string.assert_called_once()
+    uploaded_content = mock_blob.upload_from_string.call_args[0][0]
+    assert json.loads(uploaded_content) == entries
+
+
+def test_save_retry_queue_falls_back_to_local_when_gcs_unreachable(mocker, tmp_retry_queue_path, caplog):
+    """Tests that save_retry_queue falls back to local when GCS itself is unreachable."""
+    mocker.patch("cache.GCS_BUCKET_NAME", "test-bucket")
+    mocker.patch("cache.storage.Client", side_effect=Exception("connection refused"))
+    entries = [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
+
+    with caplog.at_level(logging.WARNING):
+        save_retry_queue("ryanair", entries)
+
+    assert json.loads(tmp_retry_queue_path.read_text()) == entries
+    assert "GCS unreachable for ryanair retry queue" in caplog.text

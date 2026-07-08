@@ -12,11 +12,13 @@ DATE_FORMAT = "%Y%m%d"
 # Local
 LOCAL_CACHE_ROOT = "cache"
 LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "{origin}", "{yyyymm}")
+LOCAL_RETRY_QUEUE_PATH = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "retry.json")
 
 # Cloud
 GCS_BUCKET_NAME = os.environ.get("FLIGHT_SEARCH_GCS_BUCKET", "")
 CLOUD_CACHE_ROOT = "bronze"
 CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{origin}}/{{yyyymm}}"
+CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/retry.json"
 
 
 # ---------------------------
@@ -24,7 +26,6 @@ CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{origin}}/{{y
 # ---------------------------
 
 SCRAPE_BUFFER_DAYS = 3 * 30 + 7  # ~3 months + 1 week
-RETRY_QUEUE_PATH = os.path.join(LOCAL_CACHE_ROOT, "retry.json")
 SCRAPE_ORIGINS = [
     # Top 5 (data-backed, 2026 Cirium Diio)
     "STN",
