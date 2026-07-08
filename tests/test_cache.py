@@ -7,24 +7,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from cache import read_cache, write_cache, _serialize_datetime, _get_gcs_bucket
-from config import DATE_FORMAT
+from config import DATE_FORMAT, CLOUD_FLIGHT_CACHE_DIR
 from models import Flight
 from conftest import FROZEN_NOW, SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS, make_dummy_flight
 
 
 # ---------------------------
-# GCS fixtures/helpers
+# Helpers
 # ---------------------------
-
-
-@pytest.fixture
-def mock_gcs_bucket(mocker):
-    """Patches cache.GCS_BUCKET_NAME and cache.storage.Client to return a mock bucket."""
-    mocker.patch("cache.GCS_BUCKET_NAME", "test-bucket")
-    mock_client = mocker.patch("cache.storage.Client")
-    mock_bucket = MagicMock()
-    mock_client.return_value.bucket.return_value = mock_bucket
-    return mock_bucket
 
 
 def _make_mock_gcs_blob(airport: str, date: datetime, flights: list[Flight]) -> MagicMock:
@@ -70,6 +60,19 @@ def tmp_cache_dir(tmp_path, mocker):
         return filepath
 
     yield str(test_dir), create_mock_cache_file
+
+
+# --- GCS ---
+
+
+@pytest.fixture
+def mock_gcs_bucket(mocker):
+    """Patches cache.GCS_BUCKET_NAME and cache.storage.Client to return a mock bucket."""
+    mocker.patch("cache.GCS_BUCKET_NAME", "test-bucket")
+    mock_client = mocker.patch("cache.storage.Client")
+    mock_bucket = MagicMock()
+    mock_client.return_value.bucket.return_value = mock_bucket
+    return mock_bucket
 
 
 # ---------------------------
@@ -279,7 +282,7 @@ def test_write_cache_creates_directory_if_not_exists(mocker, tmp_path, caplog):
 
 
 # ---------------------------
-# Tests for GCS-first caching (read_cache/write_cache try GCS before local)
+# Tests for GCS-First Caching
 # ---------------------------
 
 
@@ -343,7 +346,8 @@ def test_write_cache_uploads_ndjson_to_gcs(mock_gcs_bucket):
     """Tests that write_cache uploads flights as NDJSON to today's GCS blob."""
     write_cache("EIN", "ryanair", [SAMPLE_FLIGHT_BCN])
 
-    expected_blob_name = f"bronze/flights/ryanair/EIN/{FROZEN_NOW.strftime(DATE_FORMAT)}.json"
+    month_dir = CLOUD_FLIGHT_CACHE_DIR.format(airline="ryanair", origin="EIN", yyyymm=FROZEN_NOW.strftime("%Y%m"))
+    expected_blob_name = f"{month_dir}/{FROZEN_NOW.strftime(DATE_FORMAT)}.json"
     mock_gcs_bucket.blob.assert_called_once_with(expected_blob_name)
     mock_blob = mock_gcs_bucket.blob.return_value
     mock_blob.upload_from_string.assert_called_once()

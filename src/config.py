@@ -9,10 +9,14 @@ from datetime import timedelta
 CACHE_TTL = timedelta(days=1)  # scraping runs daily now, so cache is only fresh for the current day
 DATE_FORMAT = "%Y%m%d"
 
+# Local
 LOCAL_CACHE_ROOT = "cache"
 LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "{origin}", "{yyyymm}")
 
+# Cloud
 GCS_BUCKET_NAME = os.environ.get("FLIGHT_SEARCH_GCS_BUCKET", "")
+CLOUD_CACHE_ROOT = "bronze"
+CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{origin}}/{{yyyymm}}"
 
 
 # ---------------------------

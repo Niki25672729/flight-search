@@ -2,18 +2,14 @@ import pytest
 import argparse
 from unittest.mock import patch
 
-from cli import (
-    validate_departure_airport,
-    validate_timerange,
-    validate_budget,
-    parse_arguments
-)
+from cli import validate_departure_airport, validate_timerange, validate_budget, parse_arguments
 from config import MAX_TIMERANGE_MONTHS
 
 
 # ---------------------------
-# validate_departure_airport
+# Tests for validate_departure_airport
 # ---------------------------
+
 
 def test_validate_departure_airport_valid():
     assert validate_departure_airport("EIN") == "EIN"
@@ -33,8 +29,9 @@ def test_validate_departure_airport_non_european():
 
 
 # ---------------------------
-# validate_timerange
+# Tests for validate_timerange
 # ---------------------------
+
 
 def test_validate_timerange_valid_days():
     assert validate_timerange("1d") == 1
@@ -80,8 +77,9 @@ def test_validate_timerange_exceeds_max_months():
 
 
 # ---------------------------
-# validate_budget
+# Tests for validate_budget
 # ---------------------------
+
 
 def test_validate_budget_valid():
     assert validate_budget("1") == 1
@@ -93,7 +91,7 @@ def test_validate_budget_invalid_format():
     for invalid, msg in [
         ("abc", "Invalid budget format: abc"),
         ("1.5", "Invalid budget format: 1.5"),
-        ("", "Invalid budget format:")
+        ("", "Invalid budget format:"),
     ]:
         with pytest.raises(argparse.ArgumentTypeError, match=msg):
             validate_budget(invalid)
@@ -110,8 +108,9 @@ def test_validate_budget_negative():
 
 
 # ---------------------------
-# parse_arguments
+# Tests for parse_arguments
 # ---------------------------
+
 
 def test_parse_arguments_defaults():
     with patch("sys.argv", ["flight_search.py"]):

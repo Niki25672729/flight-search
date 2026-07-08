@@ -7,7 +7,7 @@ import pytest
 from scraper import (
     _strip_city_annotation,
     _extract_city_country_from_full,
-    _classify_route,
+    _classify_airport,
     _save_unknown_and_ambiguous_findings,
     _load_retry_queue,
     _save_retry_queue,
@@ -110,66 +110,66 @@ def test_extract_city_country_from_full_handles_missing_or_malformed():
 
 
 # ---------------------------
-# Tests for _classify_route
+# Tests for _classify_airport
 # ---------------------------
 
 
-def test_classify_route_known_airport_agrees():
+def test_classify_airport_known_airport_agrees():
     """Tests that a known EU airport whose API data agrees with the static record is resolved, unlogged."""
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("BCN", "Barcelona", "Spain", ambiguous_found, unknown_found)
+    result = _classify_airport("BCN", "Barcelona", "Spain", ambiguous_found, unknown_found)
 
     assert result == ("Barcelona", "Spain")
     assert ambiguous_found == {}
 
 
-def test_classify_route_known_airport_disagrees_logs_ambiguous():
+def test_classify_airport_known_airport_disagrees_logs_ambiguous():
     """Tests that a known EU airport whose API data disagrees with the static record is logged as ambiguous."""
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("BCN", "Barna", "Spain", ambiguous_found, unknown_found)
+    result = _classify_airport("BCN", "Barna", "Spain", ambiguous_found, unknown_found)
 
     # API value wins for the resolved Flight data, but the mismatch is flagged
     assert result == ("Barna", "Spain")
     assert ambiguous_found == {"BCN": {"city": "Barna", "country": "Spain"}}
 
 
-def test_classify_route_falls_back_to_static_when_api_data_missing():
+def test_classify_airport_falls_back_to_static_when_api_data_missing():
     """Tests that a known EU airport with no API city/country falls back to the static record."""
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("BCN", None, None, ambiguous_found, unknown_found)
+    result = _classify_airport("BCN", None, None, ambiguous_found, unknown_found)
 
     assert result == ("Barcelona", "Spain")
 
 
-def test_classify_route_ignored_airport_skipped():
+def test_classify_airport_ignored_airport_skipped():
     """Tests that an ignored airport (e.g. XYZ, in ignored_airports.json) is skipped without logging."""
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("XYZ", None, None, ambiguous_found, unknown_found)
+    result = _classify_airport("XYZ", None, None, ambiguous_found, unknown_found)
 
     assert result is None
     assert unknown_found == {}
 
 
-def test_classify_route_unknown_airport_logged():
+def test_classify_airport_unknown_airport_logged():
     """Tests that a code in neither eu_airports.json nor ignored_airports.json is logged as unknown."""
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("ZZZ", "Somewhere", "Nowhere", ambiguous_found, unknown_found)
+    result = _classify_airport("ZZZ", "Somewhere", "Nowhere", ambiguous_found, unknown_found)
 
     assert result is None
     assert unknown_found == {"ZZZ": {"city": "Somewhere", "country": "Nowhere"}}
 
 
-def test_classify_route_does_not_relog_known_unknown(mocker):
+def test_classify_airport_does_not_relog_known_unknown(mocker):
     """Tests that an airport already recorded in unknown_airport_details is not re-logged."""
     mocker.patch("scraper.unknown_airport_details", {"ZZZ": {"city": "Existing", "country": "Country"}})
     ambiguous_found, unknown_found = {}, {}
 
-    result = _classify_route("ZZZ", "Somewhere", "Nowhere", ambiguous_found, unknown_found)
+    result = _classify_airport("ZZZ", "Somewhere", "Nowhere", ambiguous_found, unknown_found)
 
     assert result is None
     assert unknown_found == {}
@@ -202,7 +202,7 @@ def test_save_unknown_and_ambiguous_findings_skips_empty(mock_unknown_airports_f
 
 
 # ---------------------------
-# Tests for scrape_ryanair (end-to-end orchestration)
+# Tests for End-to-End Orchestration
 # ---------------------------
 
 
@@ -303,7 +303,7 @@ def test_scrape_ryanair_classifies_each_destination_only_once(mocker, mock_ryana
     """Tests that a destination seen across multiple days is only classified once (not re-logged repeatedly)."""
     mocker.patch("scraper.SCRAPE_BUFFER_DAYS", 3)
     mocker.patch("scraper.time.sleep")
-    mock_classify = mocker.patch("scraper._classify_route", return_value=("Barcelona", "Spain"))
+    mock_classify = mocker.patch("scraper._classify_airport", return_value=("Barcelona", "Spain"))
     mock_ryanair_client.get_cheapest_flights.return_value = [make_ryanair_py_flight(destination="BCN")]
 
     result = scrape_ryanair("EIN")
@@ -327,7 +327,7 @@ def test_scrape_ryanair_records_failed_day_for_retry(mocker, mock_ryanair_client
 
 
 # ---------------------------
-# Tests for the retry queue (_load_retry_queue/_save_retry_queue/_record_failed_query)
+# Tests for Retry
 # ---------------------------
 
 
@@ -366,11 +366,6 @@ def test_save_and_load_retry_queue_roundtrip(tmp_retry_queue_path):
     _save_retry_queue(entries)
 
     assert _load_retry_queue() == entries
-
-
-# ---------------------------
-# Tests for retry_failed_queries
-# ---------------------------
 
 
 def test_retry_failed_queries_empty_queue_returns_empty(tmp_retry_queue_path):

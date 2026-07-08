@@ -19,8 +19,11 @@ from utils import EU_AIRPORT_DETAILS, IGNORED_AIRPORTS, ambiguous_airport_detail
 
 
 # ---------------------------
-# Helper
+# Helpers
 # ---------------------------
+
+
+# --- City/country parsing ---
 
 
 def _strip_city_annotation(city: str | None) -> str | None:
@@ -42,7 +45,10 @@ def _extract_city_country_from_full(destination_full: str | None) -> tuple[str |
     return _strip_city_annotation(city), country
 
 
-def _classify_route(
+# --- Airport classification ---
+
+
+def _classify_airport(
     code: str,
     api_city: str | None,
     api_country: str | None,
@@ -99,7 +105,9 @@ def _save_unknown_and_ambiguous_findings(
             logging.warning(f"Failed to save ambiguous airports: {e}")
 
 
-# For retry logic
+# --- Retry ---
+
+
 def _load_retry_queue() -> list[dict]:
     """Loads the queue of failed daily queries pending retry, creating an empty file if missing."""
     if not os.path.exists(RETRY_QUEUE_PATH):
@@ -134,7 +142,7 @@ def _record_failed_query(origin_iata: str, query_date: date) -> None:
 
 
 # ---------------------------
-# Main Function
+# Public API
 # ---------------------------
 
 
@@ -175,7 +183,7 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
                 continue
             if airport_code not in resolved:
                 api_city, api_country = _extract_city_country_from_full(flight.destinationFull)
-                classified = _classify_route(airport_code, api_city, api_country, ambiguous_found, unknown_found)
+                classified = _classify_airport(airport_code, api_city, api_country, ambiguous_found, unknown_found)
                 if classified is None:
                     skipped.add(airport_code)
                     continue
@@ -246,7 +254,7 @@ def retry_failed_queries() -> list[Flight]:
                 continue
             if code not in resolved:
                 api_city, api_country = _extract_city_country_from_full(flight.destinationFull)
-                classified = _classify_route(code, api_city, api_country, ambiguous_found, unknown_found)
+                classified = _classify_airport(code, api_city, api_country, ambiguous_found, unknown_found)
                 if classified is None:
                     skipped.add(code)
                     continue

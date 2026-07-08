@@ -59,13 +59,13 @@ uv run pytest
 uv run pytest tests/test_scraper.py -v
 
 # Lint
-uv run ruff check src/
+uv run ruff check src/ pipeline/
 
 # Format
-uv run ruff format src/
+uv run ruff format src/ pipeline/
 
 # Type-check
-uv run mypy src/
+uv run mypy src/ pipeline/
 ```
 
 ## Project Layout
@@ -73,36 +73,36 @@ uv run mypy src/
 ```
 /
 ├── src/
-│   ├── __init__.py              # Package marker — do not modify
-│   ├── flight_search.py         # Entry point — orchestrates all modules
-│   ├── cli.py                   # Argument parsing and validation
-│   ├── config.py                # All constants (cache, scraping, CLI, paths)
-│   ├── models.py                # Shared data model — Flight dataclass
-│   ├── utils.py                 # Shared helpers — airport data loading
-│   ├── cache.py                 # Read/write local JSON cache
-│   ├── scraper.py               # Scrape budget airline sites
-│   ├── display.py               # Format and print results as table
-│   ├── eu_airports.json         # Static IATA to city/country lookup
-│   ├── ignored_airports.json    # Static IATA that ignored during flight search
-│   ├── ambiguous_airports.json  # Auto-generated — ambiguous IATA codes discovered during scraping
-│   └── unknown_airports.json    # Auto-generated — unknown IATA codes discovered during scraping
+│   ├── __init__.py                 # Package marker — do not modify
+│   ├── flight_search.py            # Entry point — orchestrates all modules
+│   ├── cli.py                      # Argument parsing and validation
+│   ├── config.py                   # All constants (cache, scraping, CLI, paths)
+│   ├── models.py                   # Shared data model — Flight dataclass
+│   ├── utils.py                    # Shared helpers — airport data loading
+│   ├── cache.py                    # Read/write local JSON cache
+│   ├── scraper.py                  # Scrape budget airline sites
+│   ├── display.py                  # Format and print results as table
+│   ├── eu_airports.json            # Static IATA to city/country lookup
+│   ├── ignored_airports.json       # Static IATA that ignored during flight search
+│   ├── ambiguous_airports.json     # Auto-generated — ambiguous IATA codes discovered during scraping
+│   └── unknown_airports.json       # Auto-generated — unknown IATA codes discovered during scraping
 ├── tests/
-│   ├── conftest.py              # Shared fixtures, constants and helpers
+│   ├── conftest.py                 # Shared fixtures, constants and helpers
 │   ├── test_cli.py
 │   ├── test_cache.py
 │   ├── test_scraper.py
 │   ├── test_display.py
 │   └── test_flight_search.py
-├── cache/                       # Auto-generated cache files (gitignored)
-├── pipeline/                     # v2, planned — see ARCHITECTURE_PIPELINE.md
-│   ├── ingestion/                # Calls src/scraper.py, writes to GCS bronze
-│   ├── transform/                # PySpark: bronze → silver
-│   ├── dbt/                      # dbt Core project: silver → gold
-│   └── orchestration/            # Airflow DAG + docker-compose.yml (local Airflow)
+├── cache/                          # Auto-generated cache files (gitignored)
+├── pipeline/                       # v2, planned — see ARCHITECTURE_PIPELINE.md
+│   ├── ingestion/                  # Calls src/scraper.py, writes to GCS bronze
+│   ├── transform/                  # PySpark: bronze → silver
+│   ├── dbt/                        # dbt Core project: silver → gold
+│   └── orchestration/              # Airflow DAG + docker-compose.yml (local Airflow)
 ├── dashboards/
-│   └── powerbi/                  # v2, planned — Power BI dashboard on gold tables
-├── ARCHITECTURE.md               # v1 design
-├── ARCHITECTURE_PIPELINE.md      # v2 design
+│   └── powerbi/                    # v2, planned — Power BI dashboard on gold tables
+├── ARCHITECTURE.md                 # v1 design
+├── ARCHITECTURE_PIPELINE.md        # v2 design
 ├── CLAUDE.md
 └── pyproject.toml
 ```
@@ -133,6 +133,23 @@ class Flight:
 ```
 
 Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight objects serialized as JSON.
+
+## Script Layout
+
+Organize Python modules in this project top to bottom into commented sections — e.g. `Constants`, `Helpers`, `Public API`. Section names use Title Case (capitalize every leading word: `Main Function`, not `Main function`). Within a section, related functions can be grouped under a lighter subsection divider.
+
+```python
+# ---------------------------
+# Section Name
+# ---------------------------
+
+
+# --- Subsection Name ---
+
+def some_function(): ...
+```
+
+Always leave 2 blank lines before a function def, regardless of section/subsection — `ruff format` enforces this and will revert anything else.
 
 ## Security
 

@@ -9,11 +9,21 @@ from typing import Any
 from google.cloud import storage
 
 from models import Flight
-from config import CACHE_TTL, DATE_FORMAT, GCS_BUCKET_NAME, LOCAL_FLIGHT_CACHE_DIR
+from config import CACHE_TTL, DATE_FORMAT, GCS_BUCKET_NAME, CLOUD_FLIGHT_CACHE_DIR, LOCAL_FLIGHT_CACHE_DIR
 from utils import _utc_now
+
+
+# ---------------------------
+# Constants
+# ---------------------------
 
 # Regex to match local flight cache filenames: {YYYYMMDD}.json
 FILENAME_REGEX = re.compile(r"^(\d{8})\.json$")
+
+
+# ---------------------------
+# Helpers
+# ---------------------------
 
 
 def _serialize_datetime(obj: object) -> str | dict[str, Any]:
@@ -46,6 +56,14 @@ def _delete_file(filepath: str, description: str):
         logging.warning(f"Cleaned up {description}: {os.path.basename(filepath)}")
     except OSError as e:
         logging.error(f"Error deleting {description} file {os.path.basename(filepath)}: {e}")
+
+
+# ---------------------------
+# Cache
+# ---------------------------
+
+
+# --- Local ---
 
 
 def _read_local_cache(departure_airport: str, airline: str) -> list[Flight] | None:
@@ -141,9 +159,12 @@ def _write_local_cache(departure_airport: str, airline: str, flights: list[Fligh
         logging.error(f"Error writing cache to {new_filename}: {e}")
 
 
+# --- Cloud ---
+
+
 def _get_gcs_bucket() -> storage.Bucket:
     """
-    PLACEHOLDER: Returns the GCS bucket client.
+    Returns the GCS bucket client.
     """
     if not GCS_BUCKET_NAME:
         raise RuntimeError("GCS_BUCKET_NAME is not configured")
@@ -151,15 +172,18 @@ def _get_gcs_bucket() -> storage.Bucket:
 
 
 def _gcs_flight_blob_name(departure_airport: str, airline: str, date: datetime) -> str:
-    return f"bronze/flights/{airline}/{departure_airport}/{date.strftime(DATE_FORMAT)}.json"
+    month_dir = CLOUD_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=date.strftime("%Y%m"))
+    return f"{month_dir}/{date.strftime(DATE_FORMAT)}.json"
 
 
 def _read_gcs_cache(departure_airport: str, airline: str) -> list[Flight] | None:
     """
-    PLACEHOLDER: Checks GCS for the freshest flight blob (within CACHE_TTL) for this airport.
+    Checks GCS for the freshest flight blob (within CACHE_TTL) for this airport.
     """
     bucket = _get_gcs_bucket()
-    prefix = f"bronze/flights/{airline}/{departure_airport}/"
+    prefix = CLOUD_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm="")
+    if not prefix.endswith("/"):
+        prefix += "/"
     now = _utc_now()
 
     freshest_blob = None
@@ -192,6 +216,11 @@ def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]
     lines = "\n".join(json.dumps(flight, default=_serialize_datetime) for flight in flights)
     bucket.blob(blob_name).upload_from_string(lines, content_type="application/x-ndjson")
     logging.info(f"GCS cache written to {blob_name}")
+
+
+# ---------------------------
+# Public API
+# ---------------------------
 
 
 def read_cache(departure_airport: str, airline: str) -> list[Flight] | None:
