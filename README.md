@@ -12,7 +12,7 @@ A Python CLI tool that finds budget flights from a European airport within your 
 > python src/flight_search.py EIN 3m 50
 
 2026-07-03 11:06:49 – INFO – Searching flights from EIN within 90 days and €50 budget...
-2026-07-03 11:06:49 – INFO – Cache hit for EIN: Loaded EIN_20260703.json
+2026-07-03 11:06:49 – INFO – Cache hit for ryanair-EIN: Loaded EIN_20260703.json
 2026-07-03 11:06:49 – INFO – Found 31 flights matching criteria.
 
                   Budget Flight Search Results
@@ -176,7 +176,7 @@ uv run mypy src/
 
 ## Caching
 
-- The CLI checks Google Cloud Storage first (shared with the v2 pipeline below); if GCS is unreachable, it falls back automatically to a local cache at `cache/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json` — see [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md)'s "Shared GCS Cache Convention"
+- The CLI checks Google Cloud Storage first (shared with the v2 pipeline below); if GCS is unreachable, it falls back automatically to a local cache at `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — see [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md)'s "Shared GCS Cache Convention"
 - Cache TTL is **1 day** — scraping runs daily, so a fresh scrape is triggered once per calendar day
 - Local cache files are gitignored
 

@@ -123,16 +123,21 @@ All modules import `Flight` from `models.py`. Do not use raw dicts for flight da
 ```python
 @dataclass
 class Flight:
+    origin_iata: str
     destination_iata: str
     destination_city: str
     destination_country: str
     airline: str
+    flight_number: str | None  # e.g. "FR1926"; not always available
     departure_time: datetime
     arrival_time: datetime | None  # Not available for all airlines
     price_eur: float
+    currency: str = "EUR"
+    seats_left: int | None = None  # airline's reported seats/fares left; None = not reported by source
+    scraped_at: datetime = field(default_factory=datetime.now)  # when THIS record was captured
 ```
 
-Cache file: `cache/{airport}_{YYYYMMDD}.json` — list of Flight objects serialized as JSON.
+Cache file: `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — list of Flight objects serialized as JSON, one file per airline/day/origin (see `FLIGHT_CACHE_FILENAME`/`LOCAL_FLIGHT_CACHE_DIR` in `config.py`).
 
 ## Script Layout
 

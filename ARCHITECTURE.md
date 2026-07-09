@@ -118,10 +118,10 @@ User────▶│   Entry Point    │────────────�
 | Field          | Value                                                             |
 |----------------|-------------------------------------------------------------------|
 | Responsibility | Checks GCS first for flight data cache (daily TTL, since scraping runs daily). On a miss, the caller scrapes and writes the result back to GCS. Falls back entirely to the local filesystem cache if GCS itself is unreachable (network/auth error — not just a normal miss); see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
-| Inputs         | Departure airport (IATA code) |
+| Inputs         | Departure airport (IATA code), airline, and today's date (`yyyymmdd` string) |
 | Outputs        | List of `Flight` objects on cache hit, `None` on cache miss or expiry |
 | Key files      | `cache.py`                                                        |
-| External calls | Google Cloud Storage (primary — `bronze/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json`); local filesystem as fallback — `cache/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json` |
+| External calls | Google Cloud Storage (primary — `bronze/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`); local filesystem as fallback — `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` |
 
 ### `scraper.py`
 
@@ -157,7 +157,7 @@ User────▶│   Entry Point    │────────────�
 
 1. User runs `python src/flight_search.py EIN 1m 50`
 2. `cli.py` validates airport (EU only), parses time range, validates budget
-3. `flight_search.py` calls `cache.py` for the flight cache, keyed on departure airport — `cache.py` checks GCS first (within the existing 1-day TTL, since scraping runs daily); if GCS is unreachable, it falls back to the local `cache/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json` file instead
+3. `flight_search.py` computes today's date once (`yyyymmdd` string) and checks the cache for this departure airport/airline/date
 4. If flight cache hit → load flights from GCS (or the local fallback file) as list of Flight objects
 5. If flight cache miss or expired:
    1. `flight_search.py` calls `scraper.py` with departure airport
@@ -188,7 +188,7 @@ scraped_at: datetime            # when THIS record was captured (defaults to now
 ```
 
 Cache files (GCS-first, these are the local fallback paths — see "Shared GCS Cache Convention" in ARCHITECTURE_PIPELINE.md):
-- `cache/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json` — list of Flight objects, 1 day TTL (scraping runs daily)
+- `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — list of Flight objects, 1 day TTL (scraping runs daily)
 
 ## Airport Data Reconciliation
 
@@ -225,7 +225,7 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 7  | Web UI deferred until CLI is fully working            | Build UI first                 | CLI is the top priority; UI is a nice-to-have                    |
 | 8  | Scrape 3 months + 1 week buffer upfront               | Scrape per query               | Reduces scraping frequency; budget/timerange applied as filters  |
 | 9  | `flight_search.py` orchestrates all modules           | Merge logic into cache.py      | Clear separation of concerns                                     |
-| 10 | Cache filename uses YYYYMMDD only                     | Full timestamp                 | Date precision sufficient for the daily cache TTL (see #21)      |
+| 10 | Cache filename uses `{origin}_{yyyymmdd}.json` under a day-scoped `{airline}/{yyyymm}/{dd}/` directory | Full timestamp; origin as a directory segment instead of filename prefix | Date precision sufficient for the daily cache TTL (see #21); day-scoped directory makes freshness a plain existence check instead of scanning/parsing filenames (see #22) |
 | 11 | `Flight` dataclass in `models.py`                     | Raw dicts                      | Type safety and shared definition across modules                 |
 | 12 | `arrival_time` is optional (None)                     | Require arrival time           | Not all airlines provide arrival time in scrape response         |
 | 13 | Constants in `config.py`, helpers in `utils.py`       | Inline in each module          | Single source of truth, avoids duplication                       |
@@ -237,6 +237,7 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 19 | Split airport discovery into `unknown_airports.json` (not in lookup) vs `ambiguous_airports.json` (in lookup, but data disagrees), and add `ignored_airports.json` to suppress known non-EU/out-of-scope codes | Single `unknown_airports.json` for all cases; silently drop unrecognised codes | Distinguishes genuinely new airports from data-mismatches needing reconciliation, and stops known out-of-scope codes from being re-logged on every scrape |
 | 20 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
 | 21 | Flight cache TTL changed from 1 week to 1 day (supersedes decision #3) | Keep 1-week TTL | Scraping now runs daily; a 1-week TTL would skip re-scraping for 6 of every 7 days, defeating the point of a daily schedule |
+| 22 | `cache.py`'s read/write and retry-queue functions take today's date as an explicit `yyyymmdd` string parameter, computed once by the caller, instead of each function calling `_utc_now()` internally | Each function computes its own `now()` internally | One `now()` read per logical operation avoids the GCS attempt and local fallback ever resolving to different dates at a midnight boundary; also lets the day-scoped path (#10) be built without re-deriving the date in multiple places |
 
 ## External Dependencies
 
@@ -332,3 +333,4 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 019 | Flight cache TTL changed from 1 week to 1 day (scraping now runs daily) | Accepted |
 | 020 | Tried Playwright (real Chromium) for Ryanair to work around `booking/v4/availability` 409s | Superseded by 021 |
 | 021 | Revert to `ryanair-py` (supersedes 010) — cheapest fare per destination per day via `farfnd/v4/oneWayFares`, no browser automation, no separate route-discovery step | Accepted |
+| 022 | Cache path restructured to day-scoped `{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`; date passed explicitly into cache/retry-queue functions instead of each calling `_utc_now()` | Accepted |
