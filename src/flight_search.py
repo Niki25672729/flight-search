@@ -2,6 +2,7 @@ import logging
 
 from cache import read_cache, write_cache
 from cli import parse_arguments
+from config import DATE_FORMAT
 from datetime import timedelta
 from display import display_flights
 from models import Flight
@@ -42,12 +43,13 @@ def main() -> None:
 
     logging.info(f"Searching flights from {departure_airport} within {timerange_days} days and €{budget} budget...")
 
-    flights = read_cache(departure_airport, "ryanair")
+    date = _utc_now().strftime(DATE_FORMAT)
+    flights = read_cache(departure_airport, "ryanair", date)
 
     if flights is None:
         logging.info(f"No cache found for {departure_airport}, scraping...")
         flights = scrape_ryanair(departure_airport)
-        write_cache(departure_airport, "ryanair", flights)
+        write_cache(departure_airport, "ryanair", flights, date)
 
     filtered = filter_flights(flights, timerange_days, budget)
     logging.info(f"Found {len(filtered)} flights matching criteria.")

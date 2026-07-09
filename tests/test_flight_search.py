@@ -1,6 +1,7 @@
 import pytest
 
-from conftest import SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN
+from config import DATE_FORMAT
+from conftest import FROZEN_NOW, SAMPLE_FLIGHT_AMS, SAMPLE_FLIGHT_BCN
 from flight_search import filter_flights, main
 
 
@@ -116,7 +117,7 @@ def test_main_uses_cache_when_available(
 
     main()
 
-    mock_read_cache.assert_called_once_with("EIN", "ryanair")
+    mock_read_cache.assert_called_once_with("EIN", "ryanair", FROZEN_NOW.strftime(DATE_FORMAT))
     mock_scrape_ryanair.assert_not_called()
     mock_write_cache.assert_not_called()
     mock_display_flights.assert_called_once()
@@ -132,7 +133,7 @@ def test_main_scrapes_and_caches_on_cache_miss(
     main()
 
     mock_scrape_ryanair.assert_called_once_with("EIN")
-    mock_write_cache.assert_called_once_with("EIN", "ryanair", [SAMPLE_FLIGHT_BCN])
+    mock_write_cache.assert_called_once_with("EIN", "ryanair", [SAMPLE_FLIGHT_BCN], FROZEN_NOW.strftime(DATE_FORMAT))
     mock_display_flights.assert_called_once()
 
 

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cache import load_retry_queue
+from config import DATE_FORMAT
 from scraper import (
     _strip_city_annotation,
     _extract_city_country_from_full,
@@ -14,7 +15,7 @@ from scraper import (
     scrape_ryanair,
     retry_failed_queries,
 )
-from conftest import make_ryanair_py_flight
+from conftest import FROZEN_NOW, make_ryanair_py_flight
 
 
 # ---------------------------
@@ -49,12 +50,6 @@ def mock_ambiguous_airports_file(mocker, tmp_path):
     ambiguous_path = tmp_path / "ambiguous_airports.json"
     mocker.patch("scraper.AMBIGUOUS_AIRPORTS_PATH", str(ambiguous_path))
     return ambiguous_path
-
-
-@pytest.fixture
-def tmp_retry_queue_path(mocker, tmp_path):
-    mocker.patch("cache.LOCAL_RETRY_QUEUE_PATH", str(tmp_path / "{airline}_retry.json"))
-    return tmp_path / "ryanair_retry.json"
 
 
 @pytest.fixture
@@ -319,13 +314,13 @@ def test_scrape_ryanair_records_failed_day_for_retry(mocker, mock_ryanair_client
     result = scrape_ryanair("EIN")
 
     assert result == []
-    queue = load_retry_queue("ryanair")
+    queue = load_retry_queue("ryanair", FROZEN_NOW.strftime(DATE_FORMAT))
     assert len(queue) == 1
     assert queue[0]["origin_iata"] == "EIN"
 
 
 # ---------------------------
-# Tests for Retry
+# Tests for _record_failed_query
 # ---------------------------
 
 
@@ -368,7 +363,7 @@ def test_retry_failed_queries_recovers_and_clears_queue(mocker, mock_ryanair_cli
 
     assert len(result) == 1
     assert result[0].destination_iata == "BCN"
-    assert load_retry_queue("ryanair") == []
+    assert load_retry_queue("ryanair", FROZEN_NOW.strftime(DATE_FORMAT)) == []
 
 
 def test_retry_failed_queries_keeps_still_failing_entries(mocker, mock_ryanair_client, tmp_retry_queue_path):
@@ -380,6 +375,6 @@ def test_retry_failed_queries_keeps_still_failing_entries(mocker, mock_ryanair_c
     result = retry_failed_queries()
 
     assert result == []
-    queue = load_retry_queue("ryanair")
+    queue = load_retry_queue("ryanair", FROZEN_NOW.strftime(DATE_FORMAT))
     assert len(queue) == 1
     assert queue[0]["origin_iata"] == "EIN"
