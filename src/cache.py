@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import re
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
@@ -10,23 +9,13 @@ from google.cloud import storage
 
 from models import Flight
 from config import (
-    CACHE_TTL,
-    DATE_FORMAT,
+    FLIGHT_CACHE_FILENAME,
     GCS_BUCKET_NAME,
     CLOUD_FLIGHT_CACHE_DIR,
     CLOUD_RETRY_QUEUE_PATH,
     LOCAL_FLIGHT_CACHE_DIR,
     LOCAL_RETRY_QUEUE_PATH,
 )
-from utils import _utc_now
-
-
-# ---------------------------
-# Constants
-# ---------------------------
-
-# Regex to match local flight cache filenames: {YYYYMMDD}.json
-FILENAME_REGEX = re.compile(r"^(\d{8})\.json$")
 
 
 # ---------------------------
@@ -74,97 +63,45 @@ def _delete_file(filepath: str, description: str):
 # --- Local ---
 
 
-def _read_local_cache(departure_airport: str, airline: str) -> list[Flight] | None:
+def _read_local_cache(departure_airport: str, airline: str, date: str) -> list[Flight] | None:
     """
-    Reads cached flight data for a given departure airport/airline from local.
-    Returns a list of Flight objects on cache hit, None on cache miss or expiry.
-    Broken files (malformed filename/date, corrupt content) are deleted.
+    Reads today's cached flight data for a given departure airport/airline from local.
+    Returns a list of Flight objects on cache hit, None on cache miss. A corrupt file is deleted.
     """
-    now = _utc_now()
-    cache_path = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=now.strftime("%Y%m"))
-    if not os.path.exists(cache_path):
-        logging.warning(f"Cache miss for {airline}/{departure_airport}: no cache directory found.")
+    day_dir = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, yyyymm=date[:6], dd=date[6:8])
+    filename = FLIGHT_CACHE_FILENAME.format(origin=departure_airport, yyyymmdd=date)
+    filepath = os.path.join(day_dir, filename)
+
+    if not os.path.exists(filepath):
+        logging.warning(f"Cache miss for {airline}-{departure_airport}: no cache file found for today.")
         return None
-
-    freshest_valid_filepath: str | None = None
-    freshest_valid_file_date: datetime | None = None
-
-    for filename in os.listdir(cache_path):
-        filepath = os.path.join(cache_path, filename)
-        match = FILENAME_REGEX.match(filename)
-
-        if match:  # Filename matches the expected pattern {YYYYMMDD}.json
-            date_str = match.group(1)
-            try:
-                # Attempt to parse the date from the filename
-                file_date = datetime.strptime(date_str, DATE_FORMAT)
-            except ValueError:
-                # Date part of the filename is malformed — broken, delete it
-                logging.warning(
-                    f"Warning: Malformed date '{date_str}' in cache filename for {airline}/{departure_airport}: "
-                    f"{filename}."
-                )
-                _delete_file(filepath, "malformed date cache file")
-                continue
-
-            # Check if the file is fresh (within CACHE_TTL)
-            if (now - file_date) < CACHE_TTL:
-                if freshest_valid_file_date is None or file_date > freshest_valid_file_date:
-                    freshest_valid_filepath = filepath
-                    freshest_valid_file_date = file_date
-        else:  # Filename does not match FILENAME_REGEX — malformed
-            logging.warning(
-                f"Warning: Malformed filename (not {DATE_FORMAT} format) for {airline}/{departure_airport}: {filename}."
-            )
-            _delete_file(filepath, "malformed cache filename file")
-
-    # After iterating through all files, attempt to load the freshest valid one found
-    if freshest_valid_filepath:
-        try:
-            with open(freshest_valid_filepath, "r") as f:
-                data = json.load(f)
-            logging.info(
-                f"Cache hit for {airline}/{departure_airport}: Loaded {os.path.basename(freshest_valid_filepath)}"
-            )
-            return _deserialize_flight_data(data)
-        except Exception as e:
-            # Catch JSONDecodeError specifically, and other read errors
-            error_type = "corrupt" if isinstance(e, json.JSONDecodeError) else "problematic"
-            logging.error(f"Error: Cache file {os.path.basename(freshest_valid_filepath)} is {error_type}. {e}.")
-            _delete_file(freshest_valid_filepath, f"{error_type} cache file")
-            return None
-    else:
-        logging.warning(f"Cache miss for {airline}/{departure_airport}: No fresh cache found.")
-        return None
-
-
-def _write_local_cache(departure_airport: str, airline: str, flights: list[Flight]):
-    """
-    Writes flight data to a new dated cache file for the departure airport/airline to local.
-    Malformed filenames in this month's directory are cleaned up.
-    """
-    now = _utc_now()
-    cache_path = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=now.strftime("%Y%m"))
-    os.makedirs(cache_path, exist_ok=True)
-
-    # Clean up malformed cache filenames in this month's directory
-    for filename in os.listdir(cache_path):
-        if not FILENAME_REGEX.match(filename) and filename.endswith(".json"):
-            _delete_file(
-                os.path.join(cache_path, filename), f"malformed cache filename file for {airline}/{departure_airport}"
-            )
-
-    # Create new cache file
-    current_date_str = now.strftime(DATE_FORMAT)
-    new_filename = f"{current_date_str}.json"
-    new_filepath = os.path.join(cache_path, new_filename)
 
     try:
-        with open(new_filepath, "w") as f:
-            json.dump(flights, f, default=_serialize_datetime, indent=4)
-        logging.info(f"Cache written to {airline}/{departure_airport}/{now.strftime('%Y%m')}/{new_filename}")
+        with open(filepath, "r") as f:
+            data = json.load(f)
+        logging.info(f"Cache hit for {airline}-{departure_airport}: Loaded {filename}")
+        return _deserialize_flight_data(data)
     except Exception as e:
-        logging.error(f"Error writing cache to {new_filename}: {e}")
+        # Catch JSONDecodeError specifically, and other read errors
+        error_type = "corrupt" if isinstance(e, json.JSONDecodeError) else "problematic"
+        logging.error(f"Error: Cache file {filename} is {error_type}. {e}.")
+        _delete_file(filepath, f"{error_type} cache file")
+        return None
+
+
+def _write_local_cache(departure_airport: str, airline: str, flights: list[Flight], date: str):
+    """Writes flight data to today's cache file for the departure airport/airline to local."""
+    day_dir = LOCAL_FLIGHT_CACHE_DIR.format(airline=airline, yyyymm=date[:6], dd=date[6:8])
+    os.makedirs(day_dir, exist_ok=True)
+    filename = FLIGHT_CACHE_FILENAME.format(origin=departure_airport, yyyymmdd=date)
+    filepath = os.path.join(day_dir, filename)
+
+    try:
+        with open(filepath, "w") as f:
+            json.dump(flights, f, default=_serialize_datetime, indent=4)
+        logging.info(f"Cache written to {filepath}")
+    except Exception as e:
+        logging.error(f"Error writing cache to {filename}: {e}")
 
 
 # --- Cloud ---
@@ -179,48 +116,36 @@ def _get_gcs_bucket() -> storage.Bucket:
     return storage.Client().bucket(GCS_BUCKET_NAME)
 
 
-def _gcs_flight_blob_name(departure_airport: str, airline: str, date: datetime) -> str:
-    month_dir = CLOUD_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm=date.strftime("%Y%m"))
-    return f"{month_dir}/{date.strftime(DATE_FORMAT)}.json"
+def _gcs_flight_blob_name(departure_airport: str, airline: str, date: str) -> str:
+    day_dir = CLOUD_FLIGHT_CACHE_DIR.format(airline=airline, yyyymm=date[:6], dd=date[6:8])
+    filename = FLIGHT_CACHE_FILENAME.format(origin=departure_airport, yyyymmdd=date)
+    return f"{day_dir}/{filename}"
 
 
-def _read_gcs_cache(departure_airport: str, airline: str) -> list[Flight] | None:
+def _read_gcs_cache(departure_airport: str, airline: str, date: str) -> list[Flight] | None:
     """
-    Checks GCS for the freshest flight blob (within CACHE_TTL) for this airport.
+    Checks GCS for today's flight blob for this airport.
     """
     bucket = _get_gcs_bucket()
-    prefix = CLOUD_FLIGHT_CACHE_DIR.format(airline=airline, origin=departure_airport, yyyymm="")
-    if not prefix.endswith("/"):
-        prefix += "/"
-    now = _utc_now()
+    blob_name = _gcs_flight_blob_name(departure_airport, airline, date)
+    blob = bucket.blob(blob_name)
 
-    freshest_blob = None
-    freshest_date: datetime | None = None
-    for blob in bucket.list_blobs(prefix=prefix):
-        filename = blob.name.rsplit("/", 1)[-1].removesuffix(".json")
-        try:
-            blob_date = datetime.strptime(filename, DATE_FORMAT)
-        except ValueError:
-            continue
-        if (now - blob_date) < CACHE_TTL and (freshest_date is None or blob_date > freshest_date):
-            freshest_blob, freshest_date = blob, blob_date
-
-    if freshest_blob is None:
-        logging.info(f"GCS cache miss for {airline}/{departure_airport}: no fresh blob under {prefix}.")
+    if not blob.exists():
+        logging.info(f"GCS cache miss for {airline}-{departure_airport}: no blob at {blob_name}.")
         return None
 
-    data = [json.loads(line) for line in freshest_blob.download_as_text().splitlines() if line.strip()]
-    logging.info(f"GCS cache hit for {airline}/{departure_airport}: loaded {freshest_blob.name}")
+    data = [json.loads(line) for line in blob.download_as_text().splitlines() if line.strip()]
+    logging.info(f"GCS cache hit for {airline}-{departure_airport}: loaded {blob_name}")
     return _deserialize_flight_data(data)
 
 
-def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]) -> None:
+def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight], date: str) -> None:
     """
     PLACEHOLDER: Writes flights as NDJSON (one record per line) to today's GCS blob for this
     airport.
     """
     bucket = _get_gcs_bucket()
-    blob_name = _gcs_flight_blob_name(departure_airport, airline, _utc_now())
+    blob_name = _gcs_flight_blob_name(departure_airport, airline, date)
     lines = "\n".join(json.dumps(flight, default=_serialize_datetime) for flight in flights)
     bucket.blob(blob_name).upload_from_string(lines, content_type="application/x-ndjson")
     logging.info(f"GCS cache written to {blob_name}")
@@ -234,11 +159,10 @@ def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]
 # --- Local ---
 
 
-def _load_local_retry_queue(airline: str) -> list[dict]:
-    """Loads the local retry queue for this airline, creating an empty file if missing."""
-    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline)
+def _load_local_retry_queue(airline: str, date: str) -> list[dict]:
+    """Loads today's local retry queue for this airline. Returns [] if the file doesn't exist."""
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
     if not os.path.exists(path):
-        _save_local_retry_queue(airline, [])
         return []
     try:
         with open(path, "r") as f:
@@ -248,8 +172,13 @@ def _load_local_retry_queue(airline: str) -> list[dict]:
         return []
 
 
-def _save_local_retry_queue(airline: str, queue: list[dict]) -> None:
-    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline)
+def _save_local_retry_queue(airline: str, queue: list[dict], date: str) -> None:
+    """Writes today's local retry queue for this airline. Deletes the file (if present) when the queue is empty."""
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
+    if not queue:
+        if os.path.exists(path):
+            _delete_file(path, "empty retry queue")
+        return
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
@@ -261,21 +190,26 @@ def _save_local_retry_queue(airline: str, queue: list[dict]) -> None:
 # --- Cloud ---
 
 
-def _load_gcs_retry_queue(airline: str) -> list[dict]:
-    """Loads the GCS retry queue blob for this airline. Returns [] if the blob doesn't exist."""
+def _load_gcs_retry_queue(airline: str, date: str) -> list[dict]:
+    """Loads today's GCS retry queue blob for this airline. Returns [] if the blob doesn't exist."""
     bucket = _get_gcs_bucket()
-    blob = bucket.blob(CLOUD_RETRY_QUEUE_PATH.format(airline=airline))
+    blob = bucket.blob(CLOUD_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date))
     if not blob.exists():
         return []
     return json.loads(blob.download_as_text())
 
 
-def _save_gcs_retry_queue(airline: str, queue: list[dict]) -> None:
+def _save_gcs_retry_queue(airline: str, queue: list[dict], date: str) -> None:
+    """Writes today's GCS retry queue blob for this airline. Deletes the blob (if present) when the queue is empty."""
     bucket = _get_gcs_bucket()
-    blob_name = CLOUD_RETRY_QUEUE_PATH.format(airline=airline)
-    bucket.blob(blob_name).upload_from_string(
-        json.dumps(queue, indent=2, ensure_ascii=False), content_type="application/json"
-    )
+    blob_name = CLOUD_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
+    blob = bucket.blob(blob_name)
+    if not queue:
+        if blob.exists():
+            blob.delete()
+            logging.info(f"Deleted empty GCS retry queue blob {blob_name}")
+        return
+    blob.upload_from_string(json.dumps(queue, indent=2, ensure_ascii=False), content_type="application/json")
     logging.info(f"GCS retry queue written to {blob_name}")
 
 
@@ -284,45 +218,45 @@ def _save_gcs_retry_queue(airline: str, queue: list[dict]) -> None:
 # ---------------------------
 
 
-def read_cache(departure_airport: str, airline: str) -> list[Flight] | None:
+def read_cache(departure_airport: str, airline: str, date: str) -> list[Flight] | None:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        return _read_gcs_cache(departure_airport, airline)
+        return _read_gcs_cache(departure_airport, airline, date)
     except Exception as e:
-        logging.warning(f"GCS unreachable for {airline}/{departure_airport} ({e}); falling back to local cache.")
-        return _read_local_cache(departure_airport, airline)
+        logging.warning(f"GCS unreachable for {airline}-{departure_airport} ({e}); falling back to local cache.")
+        return _read_local_cache(departure_airport, airline, date)
 
 
-def write_cache(departure_airport: str, airline: str, flights: list[Flight]) -> None:
+def write_cache(departure_airport: str, airline: str, flights: list[Flight], date: str) -> None:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        _write_gcs_cache(departure_airport, airline, flights)
+        _write_gcs_cache(departure_airport, airline, flights, date)
     except Exception as e:
-        logging.warning(f"GCS unreachable for {airline}/{departure_airport} ({e}); falling back to local cache.")
-        _write_local_cache(departure_airport, airline, flights)
+        logging.warning(f"GCS unreachable for {airline}-{departure_airport} ({e}); falling back to local cache.")
+        _write_local_cache(departure_airport, airline, flights, date)
 
 
-def load_retry_queue(airline: str) -> list[dict]:
+def load_retry_queue(airline: str, date: str) -> list[dict]:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        return _load_gcs_retry_queue(airline)
-    except Exception as e:
-        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
-        return _load_local_retry_queue(airline)
-
-
-def save_retry_queue(airline: str, queue: list[dict]) -> None:
-    """
-    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
-    """
-    try:
-        _save_gcs_retry_queue(airline, queue)
+        return _load_gcs_retry_queue(airline, date)
     except Exception as e:
         logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
-        _save_local_retry_queue(airline, queue)
+        return _load_local_retry_queue(airline, date)
+
+
+def save_retry_queue(airline: str, queue: list[dict], date: str) -> None:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        _save_gcs_retry_queue(airline, queue, date)
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
+        _save_local_retry_queue(airline, queue, date)

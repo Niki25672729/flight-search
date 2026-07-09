@@ -1,8 +1,18 @@
+import os
 from datetime import datetime, timedelta
 
 import pytest
 from freezegun import freeze_time
 
+from config import (
+    CLOUD_CACHE_ROOT,
+    CLOUD_FLIGHT_CACHE_DIR,
+    CLOUD_RETRY_QUEUE_PATH,
+    DATE_FORMAT,
+    LOCAL_CACHE_ROOT,
+    LOCAL_FLIGHT_CACHE_DIR,
+    LOCAL_RETRY_QUEUE_PATH,
+)
 from models import Flight
 
 
@@ -11,6 +21,12 @@ from models import Flight
 # ---------------------------
 
 FROZEN_NOW = datetime(2026, 6, 28, 17, 0, 0)
+
+LOCAL_FLIGHT_CACHE_SUBPATH = LOCAL_FLIGHT_CACHE_DIR.removeprefix(f"{LOCAL_CACHE_ROOT}{os.sep}")
+LOCAL_RETRY_CACHE_SUBPATH = LOCAL_RETRY_QUEUE_PATH.removeprefix(f"{LOCAL_CACHE_ROOT}{os.sep}")
+CLOUD_FLIGHT_CACHE_SUBPATH = CLOUD_FLIGHT_CACHE_DIR.removeprefix(f"{CLOUD_CACHE_ROOT}/")
+CLOUD_RETRY_CACHE_SUBPATH = CLOUD_RETRY_QUEUE_PATH.removeprefix(f"{CLOUD_CACHE_ROOT}/")
+
 
 SAMPLE_FLIGHT_BCN = Flight(
     origin_iata="EIN",
@@ -91,3 +107,16 @@ def frozen_time():
     """Freezes datetime.now() to FROZEN_NOW for all tests."""
     with freeze_time(FROZEN_NOW) as frozen:
         yield frozen
+
+
+@pytest.fixture(autouse=True)
+def default_gcs_bucket_name(mocker):
+    """Defaults GCS_BUCKET_NAME to unset, isolating tests from the local environment."""
+    mocker.patch("cache.GCS_BUCKET_NAME", "")
+
+
+@pytest.fixture
+def tmp_retry_queue_path(tmp_path, mocker):
+    """Patches cache.LOCAL_RETRY_QUEUE_PATH to a temporary location. Returns today's resolved ryanair path."""
+    mocker.patch("cache.LOCAL_RETRY_QUEUE_PATH", os.path.join(str(tmp_path), LOCAL_RETRY_CACHE_SUBPATH))
+    return tmp_path / LOCAL_RETRY_CACHE_SUBPATH.format(airline="ryanair", yyyymmdd=FROZEN_NOW.strftime(DATE_FORMAT))

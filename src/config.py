@@ -1,24 +1,24 @@
 import os
-from datetime import timedelta
 
 
 # ---------------------------
 # Cache
 # ---------------------------
 
-CACHE_TTL = timedelta(days=1)  # scraping runs daily now, so cache is only fresh for the current day
 DATE_FORMAT = "%Y%m%d"
+FLIGHT_CACHE_FILENAME = "{origin}_{yyyymmdd}.json"
+FLIGHT_STATUS_FILENAME = "status.json"
 
 # Local
 LOCAL_CACHE_ROOT = "cache"
-LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "{origin}", "{yyyymm}")
-LOCAL_RETRY_QUEUE_PATH = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "retry.json")
+LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "{yyyymm}", "{dd}")
+LOCAL_RETRY_QUEUE_PATH = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "retry", "retry_{yyyymmdd}.json")
 
 # Cloud
 GCS_BUCKET_NAME = os.environ.get("FLIGHT_SEARCH_GCS_BUCKET", "")
 CLOUD_CACHE_ROOT = "bronze"
-CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{origin}}/{{yyyymm}}"
-CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/retry.json"
+CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{yyyymm}}/{{dd}}"
+CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/retry/retry_{{yyyymmdd}}.json"
 
 
 # ---------------------------
