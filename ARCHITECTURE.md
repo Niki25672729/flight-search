@@ -4,7 +4,7 @@
 
 A Python CLI tool that searches for budget flights from a European departure airport within a given time range and budget. It scrapes budget airline websites, caches results daily, and displays results as a table. A web interface is also planned for a future version.
 
-> This document covers v1 (the CLI). v2 — a data engineering pipeline and Power BI dashboard built on top of the same scraper — is documented separately in [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md). v1 stays fully functional; v2 is purely additive and lives in its own doc so the two systems don't get tangled together.
+> This document covers v1 (the CLI). v2 — a data engineering pipeline and Looker Studio dashboard built on top of the same scraper — is documented separately in [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md). v1 stays fully functional; v2 is purely additive and lives in its own doc so the two systems don't get tangled together.
 
 ## CLI Usage
 
@@ -12,11 +12,13 @@ A Python CLI tool that searches for budget flights from a European departure air
 python flight_search.py [departure_airport] [timerange] [budget]
 ```
 
-| Argument            | Format                     | Examples            | Default |
-|---------------------|---------------------------|---------------------|---------|
-| `departure_airport` | IATA code (EU only)       | `EIN`, `AMS`, `LHR` | `EIN`   |
-| `timerange`         | `{n}d` / `{n}w` / `{n}m`  | `3d`, `2w`, `1m`    | `1m`    |
-| `budget`            | Integer (euros)           | `50`, `100`         | `50`    |
+
+| Argument            | Format                   | Examples            | Default |
+|---------------------|--------------------------|---------------------|---------|
+| `departure_airport` | IATA code (EU only)      | `EIN`, `AMS`, `LHR` | `EIN`   |
+| `timerange`         | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m`    | `1m`    |
+| `budget`            | Integer (euros)          | `50`, `100`         | `50`    |
+
 
 Max search range: 3 months.
 
@@ -75,83 +77,83 @@ User────▶│   Entry Point    │────────────�
 
 ### `cli.py`
 
-| Field          | Value                                                                                              |
-|----------------|----------------------------------------------------------------------------------------------------|
-| Responsibility | Parse and validate CLI arguments                                                                   |
-| Inputs         | `departure_airport` (IATA code, EU only)<br>`timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month)<br>`budget` (euros) |
-| Outputs        | Validated params passed to `flight_search.py`                                                      |
-| Key files      | `cli.py`                                                                                           |
-| External calls | None                                                                                               |
+| Field          | Value                                         |
+|----------------|-----------------------------------------------|
+| Responsibility | Parse and validate CLI arguments              |
+| Inputs         | `departure_airport` (IATA code, EU only) `timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month) `budget` (euros) |
+| Outputs        | Validated params passed to `flight_search.py` |
+| Key files      | `cli.py`                                      |
+| External calls | None                                          |
 
 ### `config.py`
 
-| Field          | Value                                                      |
-|----------------|------------------------------------------------------------|
-| Responsibility | All constants — cache, scraping, CLI defaults, file paths  |
-| Inputs         | None                                                       |
-| Outputs        | Constants imported by all modules                          |
-| Key files      | `config.py`                                                |
-| External calls | None                                                       |
+| Field          | Value                                                     |
+|----------------|-----------------------------------------------------------|
+| Responsibility | All constants — cache, scraping, CLI defaults, file paths |
+| Inputs         | None                                                      |
+| Outputs        | Constants imported by all modules                         |
+| Key files      | `config.py`                                               |
+| External calls | None                                                      |
 
 ### `models.py`
 
-| Field          | Value                                                              |
-|----------------|----------------------------------------------------------------------|
-| Responsibility | Shared data model definitions                                      |
-| Inputs         | None                                                                |
-| Outputs        | `Flight` dataclass imported by cache, scraper, display     |
-| Key files      | `models.py`                                                         |
-| External calls | None                                                                |
+| Field          | Value                                                  |
+|----------------|--------------------------------------------------------|
+| Responsibility | Shared data model definitions                          |
+| Inputs         | None                                                   |
+| Outputs        | `Flight` dataclass imported by cache, scraper, display |
+| Key files      | `models.py`                                            |
+| External calls | None                                                   |
 
 ### `utils.py`
 
-| Field          | Value                                                                 |
-|----------------|--------------------------------------------------------------------------|
+| Field          | Value                       |
+|----------------|-----------------------------|
 | Responsibility | Shared helpers — load `eu_airports.json`/`ignored_airports.json`, classify destination codes, write `unknown_airports.json`/`ambiguous_airports.json` (see [Airport Data Reconciliation](#airport-data-reconciliation)) |
-| Inputs         | None                                                           |
-| Outputs        | Airport-related information              |
-| Key files      | `utils.py`                                                             |
+| Inputs         | None                        |
+| Outputs        | Airport-related information |
+| Key files      | `utils.py`                  |
 | External calls | Local filesystem — `eu_airports.json`, `ignored_airports.json`, `unknown_airports.json`, `ambiguous_airports.json` |
 
 ### `cache.py`
 
-| Field          | Value                                                             |
-|----------------|-------------------------------------------------------------------|
+| Field          | Value                                                                        |
+|----------------|------------------------------------------------------------------------------|
 | Responsibility | Checks GCS first for flight data cache (daily TTL, since scraping runs daily). On a miss, the caller scrapes and writes the result back to GCS. Falls back entirely to the local filesystem cache if GCS itself is unreachable (network/auth error — not just a normal miss); see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
 | Inputs         | Departure airport (IATA code), airline, and today's date (`yyyymmdd` string) |
-| Outputs        | List of `Flight` objects on cache hit, `None` on cache miss or expiry |
-| Key files      | `cache.py`                                                        |
+| Outputs        | List of `Flight` objects on cache hit, `None` on cache miss or expiry        |
+| Key files      | `cache.py`                                                                   |
 | External calls | Google Cloud Storage (primary — `bronze/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`); local filesystem as fallback — `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` |
 
 ### `scraper.py`
 
-| Field          | Value                                                      |
-|----------------|--------------------------------------------------------------|
+| Field          | Value                                                                              |
+|----------------|------------------------------------------------------------------------------------|
 | Responsibility | Fetches the CHEAPEST one-way fare per destination, per day, from the origin across the next 3 months + 1 week buffer — one query per day (see decision #16) |
-| Inputs         | Departure airport (IATA code)                              |
+| Inputs         | Departure airport (IATA code)                                                      |
 | Outputs        | List of `Flight` objects (cheapest fare only — no `seats_left`, no `arrival_time`) |
-| Key files      | `scraper.py`                                               |
+| Key files      | `scraper.py`                                                                       |
 | External calls | Ryanair `farfnd/v4/oneWayFares` endpoint via the `ryanair-py` library, one call per day in the buffer; easyJet, Wizz Air, Vueling, Norwegian, Eurowings (planned) |
 
 ### `display.py`
 
-| Field          | Value                                          |
-|----------------|------------------------------------------------|
-| Responsibility | Format and print results as a rich table       |
-| Inputs         | List of Flight objects                         |
-| Outputs        | Printed table to stdout                        |
-| Key files      | `display.py`                                   |
-| External calls | None                                           |
+| Field          | Value                                    |
+|----------------|------------------------------------------|
+| Responsibility | Format and print results as a rich table |
+| Inputs         | List of Flight objects                   |
+| Outputs        | Printed table to stdout                  |
+| Key files      | `display.py`                             |
+| External calls | None                                     |
 
 ### `web/` *(deferred)*
 
-| Field          | Value                                                      |
-|----------------|------------------------------------------------------------|
-| Responsibility | Web interface to display flight results                    |
-| Inputs         | Flight data from cache or scraper                          |
-| Outputs        | HTML page with searchable/filterable results table         |
-| Key files      | `web/app.py`, `web/templates/index.html`                   |
-| External calls | None                                                       |
+| Field          | Value                                              |
+|----------------|----------------------------------------------------|
+| Responsibility | Web interface to display flight results            |
+| Inputs         | Flight data from cache or scraper                  |
+| Outputs        | HTML page with searchable/filterable results table |
+| Key files      | `web/app.py`, `web/templates/index.html`           |
+| External calls | None                                               |
 
 ## Data Flow
 
@@ -160,11 +162,11 @@ User────▶│   Entry Point    │────────────�
 3. `flight_search.py` computes today's date once (`yyyymmdd` string) and checks the cache for this departure airport/airline/date
 4. If flight cache hit → load flights from GCS (or the local fallback file) as list of Flight objects
 5. If flight cache miss or expired:
-   1. `flight_search.py` calls `scraper.py` with departure airport
-   2. `scraper.py` loops over each day in the next 3 months + 1 week buffer, calling `ryanair-py`'s `get_cheapest_flights(origin, day, day)` — one call per day, since a single call spanning a wider range only returns the single cheapest fare across that ENTIRE range, not a per-day breakdown
-   3. Each day's results cover every destination Ryanair flies that day (no separate route-discovery call needed); each destination code is classified once (see "Airport Data Reconciliation") and cached in-memory for the rest of the run
-   4. Each result is converted into a `Flight` object — cheapest fare only, so `seats_left` and `arrival_time` are always `None`
-   5. `scraper.py` returns the combined list of Flight objects; a single day's failed query is logged and skipped, not fatal to the whole scrape
+  1. `flight_search.py` calls `scraper.py` with departure airport
+  2. `scraper.py` loops over each day in the next 3 months + 1 week buffer, calling `ryanair-py`'s `get_cheapest_flights(origin, day, day)` — one call per day, since a single call spanning a wider range only returns the single cheapest fare across that ENTIRE range, not a per-day breakdown
+  3. Each day's results cover every destination Ryanair flies that day (no separate route-discovery call needed); each destination code is classified once (see "Airport Data Reconciliation") and cached in-memory for the rest of the run
+  4. Each result is converted into a `Flight` object — cheapest fare only, so `seats_left` and `arrival_time` are always `None`
+  5. `scraper.py` returns the combined list of Flight objects; a single day's failed query is logged and skipped, not fatal to the whole scrape
 6. `flight_search.py` calls `cache.py` write method to save the scraped flights to GCS (or locally, if GCS is unreachable)
 7. `flight_search.py` filters flights by time range and budget, sorts by country, city, and time
 8. `display.py` prints filtered results as table
@@ -194,73 +196,76 @@ Cache files (GCS-first, these are the local fallback paths — see "Shared GCS C
 
 Four files work together to classify destination IATA codes encountered during scraping:
 
-| File                       | Type           | Purpose                                                                 |
-|----------------------------|----------------|--------------------------------------------------------------------------|
-| `eu_airports.json`         | Static         | Canonical IATA → city/country lookup; the source of truth                |
-| `ignored_airports.json`    | Static         | IATA codes deliberately excluded from results (e.g. known non-EU or out-of-scope codes) — scraper skips these entirely, no logging needed |
-| `unknown_airports.json`    | Auto-generated | IATA codes seen during scraping that are in neither file above — candidates to review and merge into `eu_airports.json` or `ignored_airports.json` |
-| `ambiguous_airports.json`  | Auto-generated | IATA codes that ARE in `eu_airports.json`, but where the airline's own response (city/country) disagrees with the static record — candidates to review and reconcile |
+| File                      | Type           | Purpose                                                   |
+|---------------------------|----------------|-----------------------------------------------------------|
+| `eu_airports.json`        | Static         | Canonical IATA → city/country lookup; the source of truth |
+| `ignored_airports.json`   | Static         | IATA codes deliberately excluded from results (e.g. known non-EU or out-of-scope codes) — scraper skips these entirely, no logging needed |
+| `unknown_airports.json`   | Auto-generated | IATA codes seen during scraping that are in neither file above — candidates to review and merge into `eu_airports.json` or `ignored_airports.json` |
+| `ambiguous_airports.json` | Auto-generated | IATA codes that ARE in `eu_airports.json`, but where the airline's own response (city/country) disagrees with the static record — candidates to review and reconcile |
 
 When `scraper.py` encounters a destination IATA code, it's classified as follows:
-
-1. **Code is in `eu_airports.json`**
-   - Airline response agrees with the static record → proceed normally, no logging
-   - Airline response disagrees (different city/country) → log to `ambiguous_airports.json`, still proceed using the static record
-2. **Code is not in `eu_airports.json`**
-   - Code is in `ignored_airports.json` → skip this destination, nothing logged
-   - Code is in neither file → log to `unknown_airports.json`
+1. **Code is in `eu_airports.json**`
+  - Airline response agrees with the static record → proceed normally, no logging
+  - Airline response disagrees (different city/country) → log to `ambiguous_airports.json`, still proceed using the static record
+2. **Code is not in `eu_airports.json**`
+  - Code is in `ignored_airports.json` → skip this destination, nothing logged
+  - Code is in neither file → log to `unknown_airports.json`
 
 Both auto-generated files are periodically reviewed and merged by hand: `unknown_airports.json` entries go into `eu_airports.json` (if legitimate) or `ignored_airports.json` (if it should be excluded going forward); `ambiguous_airports.json` entries are reconciled directly in `eu_airports.json`.
 
 ## Key Design Decisions
 
-| #  | Decision                                              | Alternatives considered        | Rationale                                                        |
-|----|-------------------------------------------------------|--------------------------------|------------------------------------------------------------------|
-| 1  | Scrape airline sites                                  | Skyscanner / Amadeus API       | APIs require registration/payment; scraping is free              |
-| 2  | Cache as local JSON file                              | SQLite, Redis                  | Simplest approach for a CLI tool                                 |
-| 3  | 1 week cache TTL                                      | No cache, daily cache          | Balance between freshness and avoiding frequent scrapes          |
-| 4  | Support 6 airlines                                    | All European budget airlines   | Covers majority of European budget routes                        |
-| 5  | Static lookup table for IATA to city/country mapping  | External API                   | Simpler, no API dependency, EU airports list is finite           |
-| 6  | Scraping only, no airline APIs                        | Ryanair unofficial API         | Free tier limits too restrictive for practical use               |
-| 7  | Web UI deferred until CLI is fully working            | Build UI first                 | CLI is the top priority; UI is a nice-to-have                    |
-| 8  | Scrape 3 months + 1 week buffer upfront               | Scrape per query               | Reduces scraping frequency; budget/timerange applied as filters  |
-| 9  | `flight_search.py` orchestrates all modules           | Merge logic into cache.py      | Clear separation of concerns                                     |
-| 10 | Cache filename uses `{origin}_{yyyymmdd}.json` under a day-scoped `{airline}/{yyyymm}/{dd}/` directory | Full timestamp; origin as a directory segment instead of filename prefix | Date precision sufficient for the daily cache TTL (see #21); day-scoped directory makes freshness a plain existence check instead of scanning/parsing filenames (see #22) |
-| 11 | `Flight` dataclass in `models.py`                     | Raw dicts                      | Type safety and shared definition across modules                 |
-| 12 | `arrival_time` is optional (None)                     | Require arrival time           | Not all airlines provide arrival time in scrape response         |
-| 13 | Constants in `config.py`, helpers in `utils.py`       | Inline in each module          | Single source of truth, avoids duplication                       |
-| 14 | Ryanair cookie cached as JSON, session bypassed       | pickle, re-init every run      | pickle is a security risk; re-init takes ~10 minutes             |
-| 15 | Attempted calling Ryanair's endpoints directly instead of `ryanair-py` — route discovery + windowed `booking/v4/availability` (7-day windows, single-threaded with delay/retry, separately-cached route list), later even via Playwright/browser automation to work around persistent 409s | Continue using `ryanair-py` library | Needed every flight per day (not just cheapest) plus `faresLeft`/seats-left for v2 flight analysis — but the endpoint proved unworkable: sustained bot-detection blocks that even real-browser automation only bypassed via a fragile, one-off UI-driven flow, not genuine API calls |
-| 16 | Reverted to the `ryanair-py` library (`farfnd/v4/oneWayFares`, its cheapest-fare search) — dropping `booking/v4/availability`, route discovery, and all browser automation entirely; only the cheapest fare per destination per day is captured, one query per day (a single call spanning the whole 3-month range only returns one fare for the entire range, not a per-day breakdown) | Keep debugging the direct-API/Playwright approach | `oneWayFares` works reliably with a plain `requests` session, no anti-bot workaround needed — trades away per-flight/seats-left granularity for reliability; daily scraping now builds a price-history dataset over time instead of complete per-day data in one shot |
-| 17 | Extend `Flight` with `origin_iata`, `flight_number`, `seats_left`, `currency`, `scraped_at` | Keep v1's minimal Flight fields | Needed for daily scraping and historical price-trend analysis (also consumed by the v2 pipeline); `seats_left` is currently always `None` since decision #16's data source doesn't provide it |
-| 18 | No `Route` dataclass — dropped entirely, not kept for future use (supersedes an earlier `Route` dataclass that briefly existed in `scraper.py`, never in `models.py`) | Keep a dormant `Route` dataclass around for a future airline integration that might need route-discovery data | Decision #16 dropped route discovery entirely (destinations are a side effect of each day's cheapest-fares query); keeping an unused model around for a hypothetical future need is speculative — a future airline that genuinely needs route data can reintroduce it then, informed by that airline's actual API shape |
-| 19 | Split airport discovery into `unknown_airports.json` (not in lookup) vs `ambiguous_airports.json` (in lookup, but data disagrees), and add `ignored_airports.json` to suppress known non-EU/out-of-scope codes | Single `unknown_airports.json` for all cases; silently drop unrecognised codes | Distinguishes genuinely new airports from data-mismatches needing reconciliation, and stops known out-of-scope codes from being re-logged on every scrape |
-| 20 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
-| 21 | Flight cache TTL changed from 1 week to 1 day (supersedes decision #3) | Keep 1-week TTL | Scraping now runs daily; a 1-week TTL would skip re-scraping for 6 of every 7 days, defeating the point of a daily schedule |
-| 22 | `cache.py`'s read/write and retry-queue functions take today's date as an explicit `yyyymmdd` string parameter, computed once by the caller, instead of each function calling `_utc_now()` internally | Each function computes its own `now()` internally | One `now()` read per logical operation avoids the GCS attempt and local fallback ever resolving to different dates at a midnight boundary; also lets the day-scoped path (#10) be built without re-deriving the date in multiple places |
+| #   | Decision                                                                                         | Alternatives considered                                                        | Rationale                                                       |
+|-----|--------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------|
+| 001 | Scrape airline sites                                                                             | Skyscanner / Amadeus API                                                       | APIs require registration/payment; scraping is free             |
+| 002 | Cache as local JSON file                                                                         | SQLite, Redis                                                                  | Simplest approach for a CLI tool                                |
+| 003 | 1 week cache TTL                                                                                 | No cache, daily cache                                                          | Balance between freshness and avoiding frequent scrapes         |
+| 004 | Support 6 airlines                                                                               | All European budget airlines                                                   | Covers majority of European budget routes                       |
+| 005 | Static lookup table for IATA to city/country mapping                                             | External API                                                                   | Simpler, no API dependency, EU airports list is finite          |
+| 006 | Scraping only, no airline APIs                                                                   | Ryanair unofficial API                                                         | Free tier limits too restrictive for practical use              |
+| 007 | Web UI deferred until CLI is fully working                                                       | Build UI first                                                                 | CLI is the top priority; UI is a nice-to-have                   |
+| 008 | Scrape 3 months + 1 week buffer upfront                                                          | Scrape per query                                                               | Reduces scraping frequency; budget/timerange applied as filters |
+| 009 | `flight_search.py` orchestrates all modules                                                      | Merge logic into cache.py                                                      | Clear separation of concerns                                    |
+| 010 | Cache filename uses `{origin}_{yyyymmdd}.json` under a day-scoped `{airline}/{yyyymm}/{dd}/` directory | Full timestamp; origin as a directory segment instead of filename prefix       | Date precision sufficient for the daily cache TTL (see #21); day-scoped directory makes freshness a plain existence check instead of scanning/parsing filenames (see #22) |
+| 011 | `Flight` dataclass in `models.py`                                                                | Raw dicts                                                                      | Type safety and shared definition across modules                |
+| 012 | `arrival_time` is optional (None)                                                                | Require arrival time                                                           | Not all airlines provide arrival time in scrape response        |
+| 013 | Constants in `config.py`, helpers in `utils.py`                                                  | Inline in each module                                                          | Single source of truth, avoids duplication                      |
+| 014 | Ryanair cookie cached as JSON, session bypassed                                                  | pickle, re-init every run                                                      | pickle is a security risk; re-init takes ~10 minutes            |
+| 015 | Attempted calling Ryanair's endpoints directly instead of `ryanair-py` — route discovery + windowed `booking/v4/availability` (7-day windows, single-threaded with delay/retry, separately-cached route list), later even via Playwright/browser automation to work around persistent 409s | Continue using `ryanair-py` library                                            | Needed every flight per day (not just cheapest) plus `faresLeft`/seats-left for v2 flight analysis — but the endpoint proved unworkable: sustained bot-detection blocks that even real-browser automation only bypassed via a fragile, one-off UI-driven flow, not genuine API calls |
+| 016 | Reverted to the `ryanair-py` library (`farfnd/v4/oneWayFares`, its cheapest-fare search) — dropping `booking/v4/availability`, route discovery, and all browser automation entirely; only the cheapest fare per destination per day is captured, one query per day (a single call spanning the whole 3-month range only returns one fare for the entire range, not a per-day breakdown) | Keep debugging the direct-API/Playwright approach                              | `oneWayFares` works reliably with a plain `requests` session, no anti-bot workaround needed — trades away per-flight/seats-left granularity for reliability; daily scraping now builds a price-history dataset over time instead of complete per-day data in one shot |
+| 017 | Extend `Flight` with `origin_iata`, `flight_number`, `seats_left`, `currency`, `scraped_at`      | Keep v1's minimal Flight fields                                                | Needed for daily scraping and historical price-trend analysis (also consumed by the v2 pipeline); `seats_left` is currently always `None` since decision #16's data source doesn't provide it |
+| 018 | No `Route` dataclass — dropped entirely, not kept for future use (supersedes an earlier `Route` dataclass that briefly existed in `scraper.py`, never in `models.py`) | Keep a dormant `Route` dataclass around for a future airline integration that might need route-discovery data | Decision #16 dropped route discovery entirely (destinations are a side effect of each day's cheapest-fares query); keeping an unused model around for a hypothetical future need is speculative — a future airline that genuinely needs route data can reintroduce it then, informed by that airline's actual API shape |
+| 019 | Split airport discovery into `unknown_airports.json` (not in lookup) vs `ambiguous_airports.json` (in lookup, but data disagrees), and add `ignored_airports.json` to suppress known non-EU/out-of-scope codes | Single `unknown_airports.json` for all cases; silently drop unrecognised codes | Distinguishes genuinely new airports from data-mismatches needing reconciliation, and stops known out-of-scope codes from being re-logged on every scrape |
+| 020 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency                                       | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
+| 021 | Flight cache TTL changed from 1 week to 1 day (supersedes decision #3)                           | Keep 1-week TTL                                                                | Scraping now runs daily; a 1-week TTL would skip re-scraping for 6 of every 7 days, defeating the point of a daily schedule |
+| 022 | `cache.py`'s read/write and retry-queue functions take today's date as an explicit `yyyymmdd` string parameter, computed once by the caller, instead of each function calling `_utc_now()` internally | Each function computes its own `now()` internally                              | One `now()` read per logical operation avoids the GCS attempt and local fallback ever resolving to different dates at a midnight boundary; also lets the day-scoped path (#10) be built without re-deriving the date in multiple places |
+
 
 ## External Dependencies
 
 **Active:**
 
-| Name       | Version | Purpose                              | Docs                                      |
-|------------|---------|---------------------------------------|---------------------------------------------|
-| ryanair-py | 3.0.0   | Fetches the cheapest one-way fare per destination per day from `farfnd/v4/oneWayFares`, via a plain `requests` session it manages internally — see decision #16 | https://github.com/cohaolain/ryanair-py |
-| requests   | latest  | Transitive dependency of `ryanair-py` (its `SessionManager`) — not called directly by this project's own code | https://docs.python-requests.org |
-| rich       | latest  | Table display in terminal            | https://rich.readthedocs.io               |
+| Name                 | Version | Purpose                                                                           | Docs                                                                               |
+|----------------------|---------|-----------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
+| ryanair-py           | 3.0.0   | Fetches the cheapest one-way fare per destination per day from `farfnd/v4/oneWayFares`, via a plain `requests` session it manages internally — see decision #16 | [https://github.com/cohaolain/ryanair-py](https://github.com/cohaolain/ryanair-py) |
+| requests             | latest  | Transitive dependency of `ryanair-py` (its `SessionManager`) — not called directly by this project's own code | [https://docs.python-requests.org](https://docs.python-requests.org)               |
+| rich                 | latest  | Table display in terminal                                                         | [https://rich.readthedocs.io](https://rich.readthedocs.io)                         |
+| google-cloud-storage | latest  | GCS-first cache check/write for v1 CLI (falls back to local cache if unreachable) | [https://cloud.google.com/python/docs/reference/storage/latest](https://cloud.google.com/python/docs/reference/storage/latest) |
+
 
 **Deprecated:**
 
-| Name       | Version | Purpose                                | Reason removed                              |
-|------------|---------|------------------------------------------|----------------------------------------------|
+| Name       | Version  | Purpose                                                                                    | Reason removed |
+|------------|----------|--------------------------------------------------------------------------------------------|----------------|
 | playwright | >=1.47.0 | Tried to work around `booking/v4/availability`'s 409s via a real headless Chromium session | See decisions #15-16 — the endpoint itself was abandoned, not just the workaround, so this dependency is no longer needed for Ryanair. Kept in mind for other, JS-heavy airline sites (see Future table) |
+
 
 **Future (not yet active):**
 
-| Name           | Version | Purpose                              | Docs                                          |
-|----------------|---------|--------------------------------------|-----------------------------------------------|
-| beautifulsoup4 | latest  | HTML parsing for future airlines     | https://www.crummy.com/software/BeautifulSoup |
-| google-cloud-storage | latest | GCS-first cache check/write for v1 CLI (falls back to local cache if unreachable) | https://cloud.google.com/python/docs/reference/storage/latest |
+| Name           | Version | Purpose                          | Docs                                                                                           |
+|----------------|---------|----------------------------------|------------------------------------------------------------------------------------------------|
+| beautifulsoup4 | latest  | HTML parsing for future airlines | [https://www.crummy.com/software/BeautifulSoup](https://www.crummy.com/software/BeautifulSoup) |
+
 
 ## Constraints & Assumptions
 
@@ -287,50 +292,51 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 
 ## Supported Airlines
 
-| Airline   | Website         | Method          | Status       |
-|-----------|-----------------|-----------------|--------------|
-| Ryanair   | ryanair.com     | `ryanair-py` library (`farfnd/v4/oneWayFares`) | ✅ v1 |
-| easyJet   | easyjet.com     | Scraping        | 🔜 planned   |
-| Wizz Air  | wizzair.com     | Scraping        | 🔜 planned   |
-| Vueling   | vueling.com     | Scraping        | 🔜 planned   |
-| Norwegian | norwegian.com   | Scraping        | 🔜 planned   |
-| Eurowings | eurowings.com   | Scraping        | 🔜 planned   |
+| Airline   | Website       | Method                                         | Status    |
+|-----------|---------------|------------------------------------------------|-----------|
+| Ryanair   | ryanair.com   | `ryanair-py` library (`farfnd/v4/oneWayFares`) | ✅ v1      |
+| easyJet   | easyjet.com   | Scraping                                       | 🔜 planned |
+| Wizz Air  | wizzair.com   | Scraping                                       | 🔜 planned |
+| Vueling   | vueling.com   | Scraping                                       | 🔜 planned |
+| Norwegian | norwegian.com | Scraping                                       | 🔜 planned |
+| Eurowings | eurowings.com | Scraping                                       | 🔜 planned |
 
 ## Non-Functional Requirements
 
-| Concern            | Target / Constraint                              |
-|--------------------|-----------------------------------------------------|
-| Latency            | ~0.2-0.3s per day queried; a full scrape issues `SCRAPE_BUFFER_DAYS` (~97) requests per origin, plus a configurable politeness delay between them; subsequent runs use cache |
-| Cache TTL          | 1 day (flights) — scraping runs daily               |
+| Concern              | Target / Constraint                   |
+|----------------------|---------------------------------------|
+| Latency              | ~~0.2-0.3s per day queried; a full scrape issues `SCRAPE_BUFFER_DAYS` (~~97) requests per origin, plus a configurable politeness delay between them; subsequent runs use cache |
+| Cache TTL            | 1 day (flights) — scraping runs daily |
 | Scraping concurrency | Single-threaded, with a small delay between requests (ryanair-py retries transient failures internally) |
-| Max search range   | 3 months                                            |
-| Supported OS       | macOS, Linux                                        |
+| Max search range     | 3 months                              |
+| Supported OS         | macOS, Linux                          |
+
 
 ---
 
 ## Decision Log (ADR summary)
 
-| ADR | Decision                                                          | Status   |
-|-----|-------------------------------------------------------------------|----------|
-| 001 | Use local JSON cache over database                                | Accepted |
-| 002 | Scrape airlines directly, no paid or unofficial APIs              | Accepted |
-| 003 | Support 6 major European budget airlines                          | Accepted |
-| 004 | `flight_search.py` orchestrates all modules                       | Accepted |
-| 005 | Scrape 3 months + 1 week buffer, filter at display time           | Accepted |
-| 006 | `Flight` dataclass defined in `models.py`, shared across modules  | Accepted |
-| 007 | `arrival_time` is optional — not all airlines provide it          | Accepted |
-| 008 | Constants in `config.py`, shared helpers in `utils.py`            | Accepted |
-| 009 | Ryanair cookie cached as JSON; session bypassed via `__new__`     | Accepted |
-| 010 | Query Ryanair endpoints directly instead of via `ryanair-py`      | Superseded by 021 |
-| 011 | Fetch direct route list before querying availability              | Superseded by 021 |
-| 012 | Cache route list separately with a 1 month TTL                    | Superseded by 021 |
-| 013 | Query availability in 7-day windows per destination               | Superseded by 021 |
-| 014 | Single-threaded scraping with delay + retry                       | Accepted |
-| 015 | Extend `Flight` with fields for daily scraping/trend analysis     | Accepted |
-| 016 | New `Route` dataclass, separate from `Flight`                     | Superseded (dropped, see decision #18) |
-| 017 | Split airport handling into unknown/ambiguous/ignored files       | Accepted |
-| 018 | v1 CLI checks GCS before scraping; local file cache is fallback-only | Accepted |
-| 019 | Flight cache TTL changed from 1 week to 1 day (scraping now runs daily) | Accepted |
-| 020 | Tried Playwright (real Chromium) for Ryanair to work around `booking/v4/availability` 409s | Superseded by 021 |
-| 021 | Revert to `ryanair-py` (supersedes 010) — cheapest fare per destination per day via `farfnd/v4/oneWayFares`, no browser automation, no separate route-discovery step | Accepted |
-| 022 | Cache path restructured to day-scoped `{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`; date passed explicitly into cache/retry-queue functions instead of each calling `_utc_now()` | Accepted |
+| ADR | Decision                                                                                   | Status                                 |
+|-----|--------------------------------------------------------------------------------------------|----------------------------------------|
+| 001 | Use local JSON cache over database                                                         | Accepted                               |
+| 002 | Scrape airlines directly, no paid or unofficial APIs                                       | Accepted                               |
+| 003 | Support 6 major European budget airlines                                                   | Accepted                               |
+| 004 | `flight_search.py` orchestrates all modules                                                | Accepted                               |
+| 005 | Scrape 3 months + 1 week buffer, filter at display time                                    | Accepted                               |
+| 006 | `Flight` dataclass defined in `models.py`, shared across modules                           | Accepted                               |
+| 007 | `arrival_time` is optional — not all airlines provide it                                   | Accepted                               |
+| 008 | Constants in `config.py`, shared helpers in `utils.py`                                     | Accepted                               |
+| 009 | Ryanair cookie cached as JSON; session bypassed via `__new_`_                              | Accepted                               |
+| 010 | Query Ryanair endpoints directly instead of via `ryanair-py`                               | Superseded by 021                      |
+| 011 | Fetch direct route list before querying availability                                       | Superseded by 021                      |
+| 012 | Cache route list separately with a 1 month TTL                                             | Superseded by 021                      |
+| 013 | Query availability in 7-day windows per destination                                        | Superseded by 021                      |
+| 014 | Single-threaded scraping with delay + retry                                                | Accepted                               |
+| 015 | Extend `Flight` with fields for daily scraping/trend analysis                              | Accepted                               |
+| 016 | New `Route` dataclass, separate from `Flight`                                              | Superseded (dropped, see decision #18) |
+| 017 | Split airport handling into unknown/ambiguous/ignored files                                | Accepted                               |
+| 018 | v1 CLI checks GCS before scraping; local file cache is fallback-only                       | Accepted                               |
+| 019 | Flight cache TTL changed from 1 week to 1 day (scraping now runs daily)                    | Accepted                               |
+| 020 | Tried Playwright (real Chromium) for Ryanair to work around `booking/v4/availability` 409s | Superseded by 021                      |
+| 021 | Revert to `ryanair-py` (supersedes 010) — cheapest fare per destination per day via `farfnd/v4/oneWayFares`, no browser automation, no separate route-discovery step | Accepted                               |
+| 022 | Cache path restructured to day-scoped `{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` (provide a place for v2's pipeline summary); date passed explicitly into cache/retry-queue functions instead of each calling `_utc_now()` | Accepted                               |

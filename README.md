@@ -54,8 +54,8 @@ If you fork or run this yourself, please keep request frequency low and cache ag
 
 ## Supported Airlines
 
-| Airline   | Status     |
-|-----------|------------|
+| Airline   | Status    |
+|-----------|-----------|
 | Ryanair   | ✅ v1      |
 | easyJet   | 🔜 planned |
 | Wizz Air  | 🔜 planned |
@@ -94,11 +94,11 @@ No API key or account needed — the tool queries Ryanair's public fare-search e
 python src/flight_search.py [departure_airport] [timerange] [budget]
 ```
 
-| Argument            | Format                     | Examples            | Default |
-|---------------------|----------------------------|---------------------|---------|
-| `departure_airport` | IATA code (EU only)        | `EIN`, `AMS`, `LHR` | `EIN`   |
-| `timerange`         | `{n}d` / `{n}w` / `{n}m`   | `3d`, `2w`, `1m`    | `1m`    |
-| `budget`            | Integer (euros)            | `50`, `100`         | `50`    |
+| Argument            | Format                   | Examples            | Default |
+|---------------------|--------------------------|---------------------|---------|
+| `departure_airport` | IATA code (EU only)      | `EIN`, `AMS`, `LHR` | `EIN`   |
+| `timerange`         | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m`    | `1m`    |
+| `budget`            | Integer (euros)          | `50`, `100`         | `50`    |
 
 **Examples:**
 ```bash
@@ -188,24 +188,28 @@ v1 is the CLI tool documented above, and it **stays fully functional** — v2 is
 
 ```
 src/                    # existing v1 CLI + shared core lib (scraper, cache, models) — unchanged, imported by the pipeline
+infrastructure/
+  terraform/            # IaC — GCS bucket + service account (impersonation, no downloaded keys)
+  docker/               # Dockerfiles for each per-task container
+  airflow/              # Orchestration — Airflow DAG, runs locally via Docker Compose
 pipeline/
   ingestion/            # scheduled scrape → bronze (raw JSON in GCS)
-  transform/            # PySpark jobs: bronze → silver (clean, dedupe, type)
-  dbt/                  # dbt Core project: silver → gold (star schema, tests, docs)
-  orchestration/        # Airflow DAG — runs locally via Docker Compose (or Cloud Composer trial)
+  processing/           # PySpark jobs: bronze → silver (clean, dedupe, type)
+  transform/            # dbt Core project: silver → gold (star schema, tests, docs)
 dashboards/
-  powerbi/              # Power BI Desktop dashboard on top of gold tables
+  looker/               # Looker Studio dashboard on top of gold tables, connected directly to BigQuery
 ```
 
-| Stage        | Tool                         | Free tier / trial                           |
-|--------------|------------------------------|---------------------------------------------|
-| Ingestion    | Existing scraper, scheduled  | Triggered by the Airflow DAG                |
-| Landing      | Google Cloud Storage         | 5 GB free tier                              |
-| Processing   | PySpark on Databricks CE     | Databricks Community Edition — free forever |
-| Warehouse    | BigQuery                     | 10 GB storage + 1 TB queries/month free     |
-| Transform    | dbt Core                     | Open source, free                           |
-| Dashboard    | Power BI Desktop             | Free to build; publishing is a manual export|
-| Orchestration| Apache Airflow               | Self-hosted via Docker Compose (free); optional short-lived Cloud Composer run on GCP trial credit |
+| Stage          | Tool                          | Free tier / trial                                                                                  |
+|----------------|-------------------------------|----------------------------------------------------------------------------------------------------|
+| Infrastructure | Terraform (`google` provider) | Provisions the GCS bucket + service account — free (IaC tooling, not a hosted resource)            |
+| Ingestion      | Existing scraper, scheduled   | Triggered by the Airflow DAG                                                                       |
+| Landing        | Google Cloud Storage          | 5 GB free tier                                                                                     |
+| Processing     | PySpark (local `local[*]`)    | Runs as a local Spark session, in its own container — no external cluster                          |
+| Warehouse      | BigQuery                      | 10 GB storage + 1 TB queries/month free                                                            |
+| Transform      | dbt Core                      | Open source, free                                                                                  |
+| Dashboard      | Looker Studio                 | Free; connects directly to BigQuery, sharing via public or restricted link                         |
+| Orchestration  | Apache Airflow                | Self-hosted via Docker Compose — free forever                                                      |
 
 See [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md) for the full v2 design, component responsibilities, and the trade-offs behind each choice — kept as its own document, separate from `ARCHITECTURE.md` (v1), so the two systems stay easy to reason about independently.
 

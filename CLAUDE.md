@@ -14,34 +14,35 @@ See ARCHITECTURE.md for full design decisions.
 
 ## Tech Stack
 
-| Layer           | Technology   | Version |
-|-----------------|--------------|---------|
-| Language        | Python       | 3.12+   |
-| Ryanair client  | ryanair-py   | 3.0.0   |
-| HTTP            | requests     | latest (transitive, via ryanair-py) |
-| Table display   | rich         | latest  |
-| Test runner     | pytest       | latest  |
-| Linter          | ruff         | latest  |
-| Formatter       | ruff format  | latest  |
-| Env manager     | uv           | latest  |
+| Layer          | Technology           | Version                             |
+|----------------|----------------------|-------------------------------------|
+| Language       | Python               | 3.12+                               |
+| Ryanair client | ryanair-py           | 3.0.0                               |
+| HTTP           | requests             | latest (transitive, via ryanair-py) |
+| Table display  | rich                 | latest                              |
+| Cloud cache    | google-cloud-storage | `cache.py` checks GCS first, falling back to the local file cache if GCS is unreachable — see ARCHITECTURE.md/ARCHITECTURE_PIPELINE.md |
+| Test runner    | pytest               | latest                              |
+| Linter         | ruff                 | latest                              |
+| Formatter      | ruff format          | latest                              |
+| Env manager    | uv                   | latest                              |
 
 **Future (not yet active):**
 
-| Layer           | Technology     | Notes                                  |
-|-----------------|----------------|----------------------------------------|
-| HTML parser     | beautifulsoup4 | For scraping easyJet, Wizz Air, etc.   |
+| Layer           | Technology     | Notes                                |
+|-----------------|----------------|--------------------------------------|
+| HTML parser     | beautifulsoup4 | For scraping easyJet, Wizz Air, etc. |
 | Browser scraper | playwright     | For JS-heavy airline sites. Tried and removed for Ryanair itself (2026-07-07) — the endpoint it was working around (`booking/v4/availability`) isn't used anymore; ryanair-py's plain-`requests` session works fine for the endpoint actually used (`farfnd/v4/oneWayFares`) |
-| Cloud cache     | google-cloud-storage | `cache.py` will check GCS first, falling back to the local file cache if GCS is unreachable — see ARCHITECTURE.md/ARCHITECTURE_PIPELINE.md |
 
 **v2 pipeline (planned, see ARCHITECTURE_PIPELINE.md — does not affect v1 CLI):**
 
-| Layer             | Technology               | Notes                          |
-|-------------------|--------------------------|--------------------------------|
-| Processing        | PySpark, Databricks CE   | Free tier, no job scheduling   |
-| Landing/warehouse | GCS, BigQuery            | GCP free tier                  |
-| Transform         | dbt Core (dbt-bigquery)  | Not dbt Cloud                  |
-| Orchestration     | Apache Airflow           | Local via Docker Compose; Cloud Composer only as a short-lived trial-credit stretch |
-| Dashboard         | Power BI Desktop         | Not Power BI Service           |
+| Layer             | Technology                    | Notes                                                                               |
+|-------------------|-------------------------------|-------------------------------------------------------------------------------------|
+| IaC               | Terraform (`google` provider) | Provisions the GCS bucket + service account, see `infrastructure/terraform/`        |
+| Processing        | PySpark (local `local[*]`)    | No external cluster; runs in its own container                                     |
+| Landing/warehouse | GCS, BigQuery                 | GCP free tier                                                                       |
+| Transform         | dbt Core (dbt-bigquery)       | Not dbt Cloud                                                                       |
+| Orchestration     | Apache Airflow                | Local via Docker Compose                                                            |
+| Dashboard         | Looker Studio                 | Connects directly to BigQuery, not Power BI/Tableau                                 |
 
 ## Setup & Commands
 
@@ -94,13 +95,16 @@ uv run mypy src/ pipeline/
 │   ├── test_display.py
 │   └── test_flight_search.py
 ├── cache/                          # Auto-generated cache files (gitignored)
+├── infrastructure/
+│   ├── terraform/                  # IaC — GCS bucket + service account (impersonation, no downloaded keys)
+│   ├── docker/                     # Dockerfiles for each per-task container
+│   └── airflow/                    # Orchestration — Airflow DAG, runs locally via Docker Compose
 ├── pipeline/                       # v2, planned — see ARCHITECTURE_PIPELINE.md
 │   ├── ingestion/                  # Calls src/scraper.py, writes to GCS bronze
-│   ├── transform/                  # PySpark: bronze → silver
-│   ├── dbt/                        # dbt Core project: silver → gold
-│   └── orchestration/              # Airflow DAG + docker-compose.yml (local Airflow)
+│   ├── processing/                 # PySpark: bronze → silver
+│   └── transform/                  # dbt Core project: silver → gold
 ├── dashboards/
-│   └── powerbi/                    # v2, planned — Power BI dashboard on gold tables
+│   └── looker/                     # v2, planned — Looker Studio dashboard, connected directly to BigQuery
 ├── ARCHITECTURE.md                 # v1 design
 ├── ARCHITECTURE_PIPELINE.md        # v2 design
 ├── CLAUDE.md
@@ -159,6 +163,7 @@ Always leave 2 blank lines before a function def, regardless of section/subsecti
 ## Security
 
 - Never read, log, or commit secrets, API keys, or credentials.
+- Never read, log, or commit `infrastructure/terraform/terraform.tfvars` or `*.tfstate*` — gitignored, but can carry project IDs/resource details.
 - Never make real network requests in tests — mock all HTTP calls.
 
 ## Agent Behaviour
