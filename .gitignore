@@ -10,6 +10,15 @@ __pycache__/
 cache/
 .ryanair_cookies.json
 
+# Airflow logs (docker-compose local runs)
+logs/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+
 # Ignored airports, not required
 src/ignored_airports.json
 # Ambiguous airports (reviewed and merged manually into eu_airports.json)
