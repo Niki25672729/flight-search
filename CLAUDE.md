@@ -165,6 +165,7 @@ Always leave 2 blank lines before a function def, regardless of section/subsecti
 - Never read, log, or commit secrets, API keys, or credentials.
 - Never read, log, or commit `infrastructure/terraform/terraform.tfvars` or `*.tfstate*` — gitignored, but can carry project IDs/resource details.
 - Never make real network requests in tests — mock all HTTP calls.
+- When running an ad hoc `docker run` against a project image for verification (e.g. checking imports), always pass `--entrypoint <interpreter>` (e.g. `--entrypoint python`) rather than appending a command after the image name. Dockerfiles here use exec-form `ENTRYPOINT` (e.g. `infrastructure/docker/ingestion/Dockerfile` runs `run.py`); a trailing `docker run <image> python -c "..."` is appended as *arguments* to that entrypoint, not a replacement, and can trigger the real script (e.g. a live scrape run) instead of the intended one-off command.
 
 ## Agent Behaviour
 

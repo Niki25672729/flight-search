@@ -117,6 +117,8 @@ def default_gcs_bucket_name(mocker):
 
 @pytest.fixture
 def tmp_retry_queue_path(tmp_path, mocker):
-    """Patches cache.LOCAL_RETRY_QUEUE_PATH to a temporary location. Returns today's resolved ryanair path."""
+    """Patches cache.LOCAL_RETRY_QUEUE_PATH to a temporary location. Returns today's resolved ryanair/EIN path."""
     mocker.patch("cache.LOCAL_RETRY_QUEUE_PATH", os.path.join(str(tmp_path), LOCAL_RETRY_CACHE_SUBPATH))
-    return tmp_path / LOCAL_RETRY_CACHE_SUBPATH.format(airline="ryanair", yyyymmdd=FROZEN_NOW.strftime(DATE_FORMAT))
+    return tmp_path / LOCAL_RETRY_CACHE_SUBPATH.format(
+        airline="ryanair", origin="EIN", yyyymmdd=FROZEN_NOW.strftime(DATE_FORMAT)
+    )

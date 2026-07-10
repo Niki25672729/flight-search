@@ -55,7 +55,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 |----------------|------------------------------------------------------------------|
 | Responsibility | Provision shared GCP resources: the bronze/silver GCS bucket (90-day lifecycle rule on `bronze/`) and a service account with `storage.objectAdmin`, granted via impersonation rather than a downloaded key |
 | Inputs         | Terraform variables (`terraform.tfvars`, gitignored)             |
-| Outputs        | GCS bucket + service account that the CLI (`src/cache.py`) and pipeline (`pipeline/ingestion/core.py`) authenticate against |
+| Outputs        | GCS bucket + service account that the CLI (`src/cache.py`) and pipeline (`pipeline/ingestion/run.py`) authenticate against |
 | Key files      | `infrastructure/terraform/main.tf`, `variables.tf`, `outputs.tf` |
 | External calls | GCP Storage + IAM APIs, via the `hashicorp/google` provider      |
 
@@ -84,9 +84,9 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 | Field          | Value                                                                                            |
 |----------------|--------------------------------------------------------------------------------------------------|
 | Responsibility | `ingest_airport` calls v1's scraper (`src/scraper.py`) per configured airport and writes bronze to GCS<br>`retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue and merges recovered flights |
-| Inputs         | Scrape-origins file on GCS                                                                       |
+| Inputs         | `SCRAPE_ORIGINS` (hardcoded in `src/config.py` — see decision #008)                              |
 | Outputs        | Raw availability data written to GCS as NDJSON. Flights are partitioned daily as `bronze/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json`. |
-| Key files      | `pipeline/ingestion/core.py`, `pipeline/ingestion/manual_run.py` (manual/hotfix CLI entry point) |
+| Key files      | `pipeline/ingestion/run.py` (scheduled entry point — one origin or `retry` per invocation, see Airflow DAG), `pipeline/ingestion/manual_run.py` (manual/hotfix CLI entry point) |
 | External calls | `scraper` (v1's `src/scraper.py`, imported directly), Google Cloud Storage                       |
 
 ### `pipeline/processing/` (TBD)
@@ -122,7 +122,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ## Data Flow
 
 1. Airflow DAG triggers on schedule (e.g. daily)
-2. Task 1 — ingestion (`pipeline/ingestion/core.py`'s `ingest_airport`) calls v1's scraper for each configured airport and writes bronze to GCS; `retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue
+2. Task 1 — ingestion: one Airflow-mapped task per origin, each launching its own `pipeline/ingestion/run.py` container that calls `ingest_airport` for that origin and writes bronze to GCS; `retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue (invoked manually via `run.py retry` or `manual_run.py retry`, not yet part of the scheduled DAG)
 3. Task 2 — PySpark job (`pipeline/processing/`) reads bronze flights, cleans/dedupes/types, writes silver (Parquet) to GCS
 4. Task 3 — `dbt run` (`pipeline/transform/`, via `dbt-bigquery`) queries silver through a BigQuery external table over the GCS path (a lightweight pointer, not a load job) and materializes gold star schema natively in BigQuery (exact schema TBD, pending dashboard requirements); `dbt test` validates it
 5. Looker Studio (`dashboards/looker/`) connects directly to the gold BigQuery tables (native connector, live or scheduled refresh) — no separate export step needed
@@ -147,7 +147,7 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 | 005 | Apache Airflow for orchestration                                                                     | GitHub Actions, Databricks Workflows, dbt Cloud scheduler              | Airflow gives task-level retries, backfills, and dependency-aware scheduling needed to run ingest → processing → transform as one DAG with per-task state; GitHub Actions is a CI/CD tool without native backfill/catchup, and the dbt Cloud scheduler only covers the dbt step, not the whole pipeline. Databricks Workflows isn't available on Community Edition |
 | 006 | Airflow runs locally via Docker Compose                                                              | Always-on Cloud Composer                                               | Always-on managed Airflow isn't free; local Docker Compose is free forever and sufficient to develop and demo the DAG |
 | 007 | Reuse v1's scraper/cache (`src/`) as pipeline ingestion source                                       | Separate scraper implementation for pipeline                           | One source of truth; avoids duplicated scraping logic and drift |
-| 008 | Scrape-origins list stored in a config file on GCS, not hardcoded in `src/config.py`                 | Hardcoded Python constant; Airflow Variable                            | Editable without a code change or redeploy — ops can add/remove origins by updating the GCS file directly; keeping it in GCS (not an Airflow Variable) stays consistent with this pipeline's existing GCS-centric config/data conventions rather than coupling it to Airflow's own metadata store |
+| 008 | Scrape-origins list stays a hardcoded Python constant (`SCRAPE_ORIGINS` in `src/config.py`)          | GCS-hosted config file (`scrape_origin.json`, checked GCS-first with local fallback) — implemented, then reverted; Airflow Variable | Tried the GCS-hosted version: `cache.py` is the only module allowed to depend on `google-cloud-storage` (see decision #004), but the DAG needs `SCRAPE_ORIGINS` at parse time from a module copied into the Airflow image *without* that dependency. Landing the origins list anywhere the DAG imports from would force either installing `google-cloud-storage` in the Airflow image (reopening #004's exact dependency-conflict risk) or keeping two separate origins sources (DAG's static list vs. ingestion's GCS-checked one) that could drift. Not worth the complexity for a list of ~50 airport codes that changes rarely — reverted to the plain constant |
 | 009 | GCS for bronze/silver landing                                                                        | S3, Azure Blob                                                         | Same-cloud integration with BigQuery (native external-table support over GCS, no cross-cloud auth or egress); free tier covers current data volume |
 | 010 | v1 CLI checks GCS before scraping; local cache is fallback-only, used when GCS itself is unreachable | Keep v1 and v2 caches fully separate (original design)                 | Sharing a single GCS cache lets an on-demand CLI search and the scheduled pipeline avoid duplicating scrape cost, while local cache still guarantees v1 works with no GCP access at all |
 | 011 | Pipeline skips an origin if today's exact-date GCS blob for it already exists                        | Always re-scrape every origin on every scheduled run                   | Avoids duplicate scraping when the CLI has already triggered an on-demand scrape for that origin earlier the same day |
@@ -212,7 +212,7 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 | 005 | Apache Airflow for orchestration, self-hosted via Docker Compose                                  | Accepted |
 | 006 | Airflow runs locally via Docker Compose                                                           | Accepted |
 | 007 | v2 pipeline reuses v1's scraper/cache (`src/`) unchanged, no duplicate scraper                    | Accepted |
-| 008 | Scrape-origins list stored in a config file on GCS, not hardcoded                                 | Accepted |
+| 008 | Scrape-origins list stays a hardcoded Python constant — GCS-hosted version tried, but Airflow also need scrape-origins list to trigger tasks and this would force `google-cloud-storage` into the Airflow image (decision #004 dependency conflict) | Reverted |
 | 009 | GCS for bronze/silver landing (GCP over AWS/Azure)                                                | Accepted |
 | 010 | Flights partitioned daily per airline/origin                                                      | Accepted |
 | 011 | v1 CLI checks GCS before scraping; local cache is fallback-only for when GCS is unreachable       | Accepted |
@@ -223,4 +223,4 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 | 016 | BigQuery as the warehouse                                                                         | Accepted |
 | 017 | Silver exposed to BigQuery as an external table, not loaded                                       | Accepted |
 | 018 | dbt Core (not dbt Cloud) for transformation                                                       | Accepted |
-| 019 | Looker Studio dashboard, connected directly to BigQuery, replacing Power BI                       | Accepted |
+| 019 | Looker Studio dashboard, connected directly to BigQuery                                           | Accepted |

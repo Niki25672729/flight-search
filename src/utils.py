@@ -11,12 +11,6 @@ from config import EU_AIRPORTS_PATH, IGNORED_AIRPORTS_PATH, AMBIGUOUS_AIRPORTS_P
 
 
 def _utc_now() -> datetime:
-    """
-    Returns the current time as a naive UTC datetime (tzinfo stripped, consistent
-    with the rest of the codebase's naive datetimes). Used for anything that ends up
-    in a cache filename/path or a `scraped_at` data field — using local time here
-    would make "today"/"now" depend on which timezone the process happens to run in.
-    """
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 

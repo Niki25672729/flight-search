@@ -5,13 +5,14 @@ from datetime import date, datetime, timedelta
 
 from ryanair import Ryanair
 
-from cache import load_retry_queue, save_retry_queue
+from cache import _CasExhausted, load_retry_queue, update_retry_queue
 from models import Flight
 from config import (
     AMBIGUOUS_AIRPORTS_PATH,
     UNKNOWN_AIRPORTS_PATH,
     DATE_FORMAT,
     SCRAPE_BUFFER_DAYS,
+    SCRAPE_ORIGINS,
     RYANAIR_CURRENCY,
     SCRAPE_REQUEST_DELAY_SECONDS,
 )
@@ -108,16 +109,100 @@ def _save_unknown_and_ambiguous_findings(
 # --- Retry ---
 
 
-def _record_failed_query(origin_iata: str, query_date: date, airline: str) -> None:
-    """Appends a failed daily query to the retry queue. Skips if already queued."""
-    today = _utc_now().strftime(DATE_FORMAT)
-    queue = load_retry_queue(airline, today)
+def _record_failed_query(origin_iata: str, query_date: date, airline: str, run_date: str) -> None:
+    """
+    Appends a failed daily query to this origin's retry queue, keyed under run_date. Skips if
+    already queued. Uses cache.update_retry_queue (CAS) rather than a plain load+save, so a
+    concurrent writer to the same origin's blob can't silently lose this append.
+    """
     entry = {"origin_iata": origin_iata, "query_date": query_date.strftime("%Y-%m-%d")}
-    if entry in queue:
+    added = False
+
+    def _append_if_missing(queue: list[dict]) -> list[dict]:
+        nonlocal added
+        if entry in queue:
+            return queue
+        added = True
+        return [*queue, entry]
+
+    try:
+        update_retry_queue(airline, origin_iata, run_date, _append_if_missing)
+    except _CasExhausted as e:
+        logging.warning(f"{origin_iata}: failed to record {entry['query_date']} in retry queue (best-effort): {e}")
         return
-    queue.append(entry)
-    save_retry_queue(airline, queue, today)
-    logging.info(f"Recorded failed query {origin_iata} {entry['query_date']} for retry.")
+
+    if added:
+        logging.info(f"Recorded failed query {origin_iata} {entry['query_date']} for retry.")
+
+
+def _retry_origin_queue(
+    origin: str,
+    queue: list[dict],
+    client: Ryanair,
+    resolved: dict[str, dict[str, str]],
+    skipped: set[str],
+    ambiguous_found: dict[str, dict[str, str]],
+    unknown_found: dict[str, dict[str, str]],
+) -> tuple[list[Flight], list[dict]]:
+    """
+    Retries every entry in a single origin's retry queue; returns the recovered flights and entries.
+    Does not write back to the retry queue itself.
+    """
+    logging.info(f"Retrying {len(queue)} failed queries for {origin}...")
+    recovered_flights: list[Flight] = []
+    recovered_entries: list[dict] = []
+
+    for i, entry in enumerate(queue, 1):
+        query_date = datetime.strptime(entry["query_date"], "%Y-%m-%d").date()
+
+        logging.info(f"[{i}/{len(queue)}] Retrying {origin} {entry['query_date']}...")
+        try:
+            raw_flights = client.get_cheapest_flights(origin, query_date, query_date)
+        except Exception as e:
+            logging.warning(f"  -> still failing: {origin} {entry['query_date']}: {e}")
+            time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
+            continue
+
+        recovered_here = 0
+        for flight in raw_flights:
+            code = flight.destination
+            if code in skipped:
+                continue
+            if code not in resolved:
+                api_city, api_country = _extract_city_country_from_full(flight.destinationFull)
+                classified = _classify_airport(code, api_city, api_country, ambiguous_found, unknown_found)
+                if classified is None:
+                    skipped.add(code)
+                    continue
+                resolved[code] = {"city": classified[0], "country": classified[1]}
+
+            info = resolved[code]
+            recovered_flights.append(
+                Flight(
+                    origin_iata=flight.origin,
+                    destination_iata=code,
+                    destination_city=info["city"],
+                    destination_country=info["country"],
+                    airline="Ryanair",
+                    flight_number=(flight.flightNumber or "").replace(" ", "") or None,
+                    departure_time=flight.departureTime,
+                    arrival_time=None,
+                    price_eur=flight.price,
+                    currency=flight.currency,
+                    scraped_at=_utc_now(),
+                )
+            )
+            recovered_here += 1
+
+        recovered_entries.append(entry)
+        logging.info(f"  -> recovered {origin} {entry['query_date']} ({recovered_here} flights).")
+        time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
+
+    logging.info(
+        f"Retry complete for {origin}: {len(recovered_flights)} flights recovered from "
+        f"{len(recovered_entries)}/{len(queue)} queries."
+    )
+    return recovered_flights, recovered_entries
 
 
 # ---------------------------
@@ -125,13 +210,14 @@ def _record_failed_query(origin_iata: str, query_date: date, airline: str) -> No
 # ---------------------------
 
 
-def scrape_ryanair(origin_airport: str) -> list[Flight]:
+def scrape_ryanair(origin_airport: str, run_date: str) -> list[Flight]:
     """
     Scrapes the cheapest one-way fare per destination, per day, from origin_airport
     for the next SCRAPE_BUFFER_DAYS.
 
     Args:
         origin_airport (str): The IATA code of the departure airport.
+        run_date (str): The date (yyyymmdd) used as the retry-queue key
 
     Returns:
         List[Flight]: A list of Flight objects.
@@ -152,7 +238,7 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
             raw_flights = client.get_cheapest_flights(origin_airport, query_date, query_date)
         except Exception as e:
             logging.warning(f"{origin_airport}: failed to fetch cheapest flights for {query_date}: {e}")
-            _record_failed_query(origin_airport, query_date, "ryanair")
+            _record_failed_query(origin_airport, query_date, "ryanair", run_date)
             time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
             continue
 
@@ -193,87 +279,57 @@ def scrape_ryanair(origin_airport: str) -> list[Flight]:
     return flights_data
 
 
-def retry_failed_queries() -> list[Flight]:
+def retry_failed_queries(run_date: str, origin: str | None = None) -> dict[str, tuple[list[Flight], list[dict]]]:
     """
-    Re-attempts every {origin, query_date} pair in the retry queue (populated by
-    scrape_ryanair when a day's cheapest-fares query still fails after ryanair-py's
-    own internal retries are exhausted).
+    Re-attempts every failed query in the retry queue for `origin`, or every origin in
+    SCRAPE_ORIGINS if omitted. Does not write to the retry queue itself. Returns a dict of
+    {origin: (recovered_flights, recovered_entries)} for origins whose queue was non-empty.
     """
-    today = _utc_now().strftime(DATE_FORMAT)
-    queue = load_retry_queue("ryanair", today)
-    if not queue:
-        logging.info("Retry queue is empty — nothing to retry.")
-        return []
+    origins_to_retry = [origin] if origin is not None else SCRAPE_ORIGINS
 
-    logging.info(f"Retrying {len(queue)} failed queries...")
+    # Load every origin's queue before touching the network, so a fully-empty run (the
+    # common case) never even constructs a Ryanair client/session.
+    queues = {o: load_retry_queue("ryanair", o, run_date) for o in origins_to_retry}
+    queues = {o: q for o, q in queues.items() if q}
+    if not queues:
+        logging.info("Retry queue is empty — nothing to retry.")
+        return {}
+
     client = Ryanair(currency=RYANAIR_CURRENCY)
-    still_failing: list[dict] = []
-    recovered_flights: list[Flight] = []
+    results: dict[str, tuple[list[Flight], list[dict]]] = {}
     resolved: dict[str, dict[str, str]] = {}
     skipped: set[str] = set()
     ambiguous_found: dict[str, dict[str, str]] = {}
     unknown_found: dict[str, dict[str, str]] = {}
 
-    for i, entry in enumerate(queue, 1):
-        origin = entry["origin_iata"]
-        query_date = datetime.strptime(entry["query_date"], "%Y-%m-%d").date()
-
-        logging.info(f"[{i}/{len(queue)}] Retrying {origin} {entry['query_date']}...")
-        try:
-            raw_flights = client.get_cheapest_flights(origin, query_date, query_date)
-        except Exception as e:
-            logging.warning(f"  -> still failing: {origin} {entry['query_date']}: {e}")
-            still_failing.append(entry)
-            time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
-            continue
-
-        recovered_here = 0
-        for flight in raw_flights:
-            code = flight.destination
-            if code in skipped:
-                continue
-            if code not in resolved:
-                api_city, api_country = _extract_city_country_from_full(flight.destinationFull)
-                classified = _classify_airport(code, api_city, api_country, ambiguous_found, unknown_found)
-                if classified is None:
-                    skipped.add(code)
-                    continue
-                resolved[code] = {"city": classified[0], "country": classified[1]}
-
-            info = resolved[code]
-            recovered_flights.append(
-                Flight(
-                    origin_iata=flight.origin,
-                    destination_iata=code,
-                    destination_city=info["city"],
-                    destination_country=info["country"],
-                    airline="Ryanair",
-                    flight_number=(flight.flightNumber or "").replace(" ", "") or None,
-                    departure_time=flight.departureTime,
-                    arrival_time=None,
-                    price_eur=flight.price,
-                    currency=flight.currency,
-                    scraped_at=_utc_now(),
-                )
-            )
-            recovered_here += 1
-
-        logging.info(f"  -> recovered {origin} {entry['query_date']} ({recovered_here} flights).")
-        time.sleep(SCRAPE_REQUEST_DELAY_SECONDS)
+    for single_origin, queue in queues.items():
+        results[single_origin] = _retry_origin_queue(
+            single_origin, queue, client, resolved, skipped, ambiguous_found, unknown_found
+        )
 
     _save_unknown_and_ambiguous_findings(ambiguous_found, unknown_found)
-    save_retry_queue("ryanair", still_failing, today)
-    logging.info(
-        f"Retry complete: {len(recovered_flights)} flights recovered, {len(still_failing)} queries still failing."
-    )
-    return recovered_flights
+    return results
+
+
+def confirm_recovered(airline: str, origin: str, run_date: str, recovered_entries: list[dict]) -> None:
+    """
+    Removes the given recovered entries from this origin's retry queue via a set difference
+    against current content (not a blind overwrite), so a concurrently-appended new entry
+    survives. Callers must only call this after the flights have been durably cached.
+    """
+    recovered_keys = {(entry["origin_iata"], entry["query_date"]) for entry in recovered_entries}
+
+    def _remove_recovered(queue: list[dict]) -> list[dict]:
+        return [entry for entry in queue if (entry["origin_iata"], entry["query_date"]) not in recovered_keys]
+
+    update_retry_queue(airline, origin, run_date, _remove_recovered)
 
 
 if __name__ == "__main__":
     # Example usage (for testing purposes)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     print("Scraping flights from EIN for Ryanair...")
-    test_flights = scrape_ryanair("EIN")
+    test_flights = scrape_ryanair("EIN", _utc_now().strftime(DATE_FORMAT))
     for flight in test_flights[:5]:  # Print first 5 results
         print(flight)
     print(f"\nTotal flights found: {len(test_flights)}")

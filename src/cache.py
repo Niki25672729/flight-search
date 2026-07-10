@@ -3,8 +3,9 @@ import logging
 import os
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
+from google.api_core.exceptions import PreconditionFailed
 from google.cloud import storage
 
 from models import Flight
@@ -16,6 +17,22 @@ from config import (
     LOCAL_FLIGHT_CACHE_DIR,
     LOCAL_RETRY_QUEUE_PATH,
 )
+
+
+# ---------------------------
+# Constants
+# ---------------------------
+
+_CAS_MAX_ATTEMPTS = 5
+
+
+# ---------------------------
+# Exceptions
+# ---------------------------
+
+
+class _CasExhausted(RuntimeError):
+    """Raised when a GCS CAS write (flight cache or retry queue) keeps losing the generation-match race."""
 
 
 # ---------------------------
@@ -139,16 +156,73 @@ def _read_gcs_cache(departure_airport: str, airline: str, date: str) -> list[Fli
     return _deserialize_flight_data(data)
 
 
-def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight], date: str) -> None:
+def _write_gcs_cache(
+    departure_airport: str, airline: str, flights: list[Flight], date: str, if_generation_match: int | None = None
+) -> bool:
     """
-    PLACEHOLDER: Writes flights as NDJSON (one record per line) to today's GCS blob for this
-    airport.
+    Writes flights as NDJSON (one record per line) to today's GCS blob for this airport.
+
+    Returns True if the write landed, False if it was dropped because of a generation
+    conflict (i.e. someone else's newer write already exists and must not be clobbered).
     """
     bucket = _get_gcs_bucket()
     blob_name = _gcs_flight_blob_name(departure_airport, airline, date)
     lines = "\n".join(json.dumps(flight, default=_serialize_datetime) for flight in flights)
-    bucket.blob(blob_name).upload_from_string(lines, content_type="application/x-ndjson")
+    blob = bucket.blob(blob_name)
+
+    try:
+        if if_generation_match is None:
+            blob.upload_from_string(lines, content_type="application/x-ndjson")
+        else:
+            blob.upload_from_string(lines, content_type="application/x-ndjson", if_generation_match=if_generation_match)
+    except PreconditionFailed:
+        logging.warning(
+            f"GCS cache write to {blob_name} dropped: blob changed since this writer last knew its state "
+            f"(expected generation {if_generation_match}) — a newer write already landed, not clobbering it."
+        )
+        return False
+
     logging.info(f"GCS cache written to {blob_name}")
+    return True
+
+
+def _update_gcs_cache(
+    departure_airport: str, airline: str, date: str, mutate: Callable[[list[Flight]], list[Flight]]
+) -> None:
+    """
+    Atomically read-mutate-writes today's GCS flight-cache blob for this airport/airline using
+    GCS's generation-match precondition (optimistic concurrency, i.e. compare-and-swap).
+    """
+    bucket = _get_gcs_bucket()
+    blob_name = _gcs_flight_blob_name(departure_airport, airline, date)
+
+    for attempt in range(1, _CAS_MAX_ATTEMPTS + 1):
+        blob = bucket.get_blob(blob_name)
+        if blob is not None:
+            data = [json.loads(line) for line in blob.download_as_text().splitlines() if line.strip()]
+            current = _deserialize_flight_data(data)
+        else:
+            current = []
+        new_flights = mutate(current)
+
+        lines = "\n".join(json.dumps(flight, default=_serialize_datetime) for flight in new_flights)
+        target = blob if blob is not None else bucket.blob(blob_name)
+        if_generation_match = blob.generation if blob is not None else 0
+
+        try:
+            target.upload_from_string(
+                lines, content_type="application/x-ndjson", if_generation_match=if_generation_match
+            )
+            logging.info(f"GCS cache written to {blob_name}")
+            return
+        except PreconditionFailed:
+            logging.warning(
+                f"CAS conflict writing GCS cache {blob_name} "
+                f"(attempt {attempt}/{_CAS_MAX_ATTEMPTS}); re-reading and retrying."
+            )
+            continue
+
+    raise _CasExhausted(f"Failed to update GCS cache {blob_name} after {_CAS_MAX_ATTEMPTS} CAS attempts.")
 
 
 # ---------------------------
@@ -159,58 +233,86 @@ def _write_gcs_cache(departure_airport: str, airline: str, flights: list[Flight]
 # --- Local ---
 
 
-def _load_local_retry_queue(airline: str, date: str) -> list[dict]:
-    """Loads today's local retry queue for this airline. Returns [] if the file doesn't exist."""
-    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
+def _load_local_retry_queue(airline: str, origin: str, date: str) -> list[dict]:
+    """Loads today's local retry queue for this airline/origin. Returns [] if the file doesn't exist."""
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, origin=origin, yyyymmdd=date)
     if not os.path.exists(path):
         return []
     try:
         with open(path, "r") as f:
             return json.load(f)
     except Exception as e:
-        logging.warning(f"Failed to load local retry queue for {airline}: {e}")
+        logging.warning(f"Failed to load local retry queue for {airline}-{origin}: {e}")
         return []
 
 
-def _save_local_retry_queue(airline: str, queue: list[dict], date: str) -> None:
-    """Writes today's local retry queue for this airline. Deletes the file (if present) when the queue is empty."""
-    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
-    if not queue:
+def _update_local_retry_queue(airline: str, origin: str, date: str, mutate: Callable[[list[dict]], list[dict]]) -> None:
+    """
+    Reads today's local retry queue, applies `mutate`, and writes the result back (deleting the file when the result is empty).
+    """
+    path = LOCAL_RETRY_QUEUE_PATH.format(airline=airline, origin=origin, yyyymmdd=date)
+    current_queue = _load_local_retry_queue(airline, origin, date)
+    new_queue = mutate(current_queue)
+    if not new_queue:
         if os.path.exists(path):
             _delete_file(path, "empty retry queue")
         return
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            json.dump(queue, f, indent=2, ensure_ascii=False)
+            json.dump(new_queue, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        logging.warning(f"Failed to save local retry queue for {airline}: {e}")
+        logging.warning(f"Failed to save local retry queue for {airline}-{origin}: {e}")
 
 
 # --- Cloud ---
 
 
-def _load_gcs_retry_queue(airline: str, date: str) -> list[dict]:
-    """Loads today's GCS retry queue blob for this airline. Returns [] if the blob doesn't exist."""
+def _load_gcs_retry_queue(airline: str, origin: str, date: str) -> list[dict]:
+    """Loads today's GCS retry queue blob for this airline/origin. Returns [] if the blob doesn't exist."""
     bucket = _get_gcs_bucket()
-    blob = bucket.blob(CLOUD_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date))
+    blob = bucket.blob(CLOUD_RETRY_QUEUE_PATH.format(airline=airline, origin=origin, yyyymmdd=date))
     if not blob.exists():
         return []
     return json.loads(blob.download_as_text())
 
 
-def _save_gcs_retry_queue(airline: str, queue: list[dict], date: str) -> None:
-    """Writes today's GCS retry queue blob for this airline. Deletes the blob (if present) when the queue is empty."""
+def _update_gcs_retry_queue(airline: str, origin: str, date: str, mutate: Callable[[list[dict]], list[dict]]) -> None:
+    """
+    Atomically read-mutate-writes today's GCS retry queue blob for this airline/origin using
+    GCS's generation-match precondition (optimistic concurrency, i.e. compare-and-swap).
+    """
     bucket = _get_gcs_bucket()
-    blob_name = CLOUD_RETRY_QUEUE_PATH.format(airline=airline, yyyymmdd=date)
-    blob = bucket.blob(blob_name)
-    if not queue:
-        if blob.exists():
-            blob.delete()
-            logging.info(f"Deleted empty GCS retry queue blob {blob_name}")
-        return
-    blob.upload_from_string(json.dumps(queue, indent=2, ensure_ascii=False), content_type="application/json")
-    logging.info(f"GCS retry queue written to {blob_name}")
+    blob_name = CLOUD_RETRY_QUEUE_PATH.format(airline=airline, origin=origin, yyyymmdd=date)
+
+    for attempt in range(1, _CAS_MAX_ATTEMPTS + 1):
+        blob = bucket.get_blob(blob_name)
+        current_queue = json.loads(blob.download_as_text()) if blob is not None else []
+        new_queue = mutate(current_queue)
+
+        try:
+            if not new_queue:
+                if blob is not None:
+                    blob.delete(if_generation_match=blob.generation)
+                    logging.info(f"Deleted empty GCS retry queue blob {blob_name}")
+                return
+            target = blob if blob is not None else bucket.blob(blob_name)
+            if_generation_match = blob.generation if blob is not None else 0
+            target.upload_from_string(
+                json.dumps(new_queue, indent=2, ensure_ascii=False),
+                content_type="application/json",
+                if_generation_match=if_generation_match,
+            )
+            logging.info(f"GCS retry queue written to {blob_name}")
+            return
+        except PreconditionFailed:
+            logging.warning(
+                f"CAS conflict writing GCS retry queue {blob_name} "
+                f"(attempt {attempt}/{_CAS_MAX_ATTEMPTS}); re-reading and retrying."
+            )
+            continue
+
+    raise _CasExhausted(f"Failed to update GCS retry queue {blob_name} after {_CAS_MAX_ATTEMPTS} CAS attempts.")
 
 
 # ---------------------------
@@ -229,34 +331,55 @@ def read_cache(departure_airport: str, airline: str, date: str) -> list[Flight] 
         return _read_local_cache(departure_airport, airline, date)
 
 
-def write_cache(departure_airport: str, airline: str, flights: list[Flight], date: str) -> None:
+def write_cache(
+    departure_airport: str, airline: str, flights: list[Flight], date: str, if_generation_match: int | None = None
+) -> bool:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        _write_gcs_cache(departure_airport, airline, flights, date)
+        return _write_gcs_cache(departure_airport, airline, flights, date, if_generation_match)
     except Exception as e:
         logging.warning(f"GCS unreachable for {airline}-{departure_airport} ({e}); falling back to local cache.")
         _write_local_cache(departure_airport, airline, flights, date)
+        return True
 
 
-def load_retry_queue(airline: str, date: str) -> list[dict]:
+def update_cache(
+    departure_airport: str, airline: str, date: str, mutate: Callable[[list[Flight]], list[Flight]]
+) -> None:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        return _load_gcs_retry_queue(airline, date)
+        _update_gcs_cache(departure_airport, airline, date, mutate)
+    except _CasExhausted:
+        raise
     except Exception as e:
-        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
-        return _load_local_retry_queue(airline, date)
+        logging.warning(f"GCS unreachable for {airline}-{departure_airport} ({e}); falling back to local cache.")
+        current = _read_local_cache(departure_airport, airline, date) or []
+        _write_local_cache(departure_airport, airline, mutate(current), date)
 
 
-def save_retry_queue(airline: str, queue: list[dict], date: str) -> None:
+def load_retry_queue(airline: str, origin: str, date: str) -> list[dict]:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
     """
     try:
-        _save_gcs_retry_queue(airline, queue, date)
+        return _load_gcs_retry_queue(airline, origin, date)
     except Exception as e:
-        logging.warning(f"GCS unreachable for {airline} retry queue ({e}); falling back to local cache.")
-        _save_local_retry_queue(airline, queue, date)
+        logging.warning(f"GCS unreachable for {airline}-{origin} retry queue ({e}); falling back to local cache.")
+        return _load_local_retry_queue(airline, origin, date)
+
+
+def update_retry_queue(airline: str, origin: str, date: str, mutate: Callable[[list[dict]], list[dict]]) -> None:
+    """
+    Checks GCS first; falls back to the local file cache if GCS itself is unreachable
+    """
+    try:
+        _update_gcs_retry_queue(airline, origin, date, mutate)
+    except _CasExhausted:
+        raise
+    except Exception as e:
+        logging.warning(f"GCS unreachable for {airline}-{origin} retry queue ({e}); falling back to local cache.")
+        _update_local_retry_queue(airline, origin, date, mutate)
