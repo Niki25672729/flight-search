@@ -48,7 +48,7 @@ def main() -> None:
 
     if flights is None:
         logging.info(f"No cache found for {departure_airport}, scraping...")
-        flights = scrape_ryanair(departure_airport)
+        flights = scrape_ryanair(departure_airport, date)
         write_cache(departure_airport, "ryanair", flights, date)
 
     filtered = filter_flights(flights, timerange_days, budget)

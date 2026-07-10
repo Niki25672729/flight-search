@@ -132,7 +132,7 @@ def test_main_scrapes_and_caches_on_cache_miss(
 
     main()
 
-    mock_scrape_ryanair.assert_called_once_with("EIN")
+    mock_scrape_ryanair.assert_called_once_with("EIN", FROZEN_NOW.strftime(DATE_FORMAT))
     mock_write_cache.assert_called_once_with("EIN", "ryanair", [SAMPLE_FLIGHT_BCN], FROZEN_NOW.strftime(DATE_FORMAT))
     mock_display_flights.assert_called_once()
 
