@@ -217,6 +217,12 @@ Status: 🔜 in progress.
 
 ---
 
+## Future Ideas (Beyond v2)
+
+- **Price forecasting** — predict future fare trends using historical price data once the v2 warehouse (gold tables) is in place
+
+---
+
 ## Contributing
 
 Pull requests are welcome. For major changes, open an issue first to discuss what you'd like to change. Please run `ruff`, `mypy`, and `pytest` before submitting.
