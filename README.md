@@ -148,7 +148,7 @@ python src/flight_search.py LHR 3m 100
 │   ├── test_display.py
 │   └── test_flight_search.py
 ├── ARCHITECTURE.md           # v1 system design and decisions
-├── ARCHITECTURE_PIPELINE.md  # v2 pipeline design and decisions
+├── ARCHITECTURE_DASHBOARD.md # v2 pipeline design and decisions
 ├── CLAUDE.md                 # AI agent guide
 ├── pyproject.toml
 └── uv.lock                   # Pinned dependency versions — do not edit manually
@@ -176,7 +176,7 @@ uv run mypy src/
 
 ## Caching
 
-- The CLI checks Google Cloud Storage first (shared with the v2 pipeline below); if GCS is unreachable, it falls back automatically to a local cache at `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — see [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md)'s "Shared GCS Cache Convention"
+- The CLI checks Google Cloud Storage first (shared with the v2 pipeline below); if GCS is unreachable, it falls back automatically to a local cache at `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — see [ARCHITECTURE_DASHBOARD.md](./ARCHITECTURE_DASHBOARD.md)'s "Shared GCS Cache Convention"
 - Cache TTL is **1 day** — scraping runs daily, so a fresh scrape is triggered once per calendar day
 - Local cache files are gitignored
 
@@ -211,7 +211,7 @@ dashboards/
 | Dashboard      | Looker Studio                 | Free; connects directly to BigQuery, sharing via public or restricted link                         |
 | Orchestration  | Apache Airflow                | Self-hosted via Docker Compose — free forever                                                      |
 
-See [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md) for the full v2 design, component responsibilities, and the trade-offs behind each choice — kept as its own document, separate from `ARCHITECTURE.md` (v1), so the two systems stay easy to reason about independently.
+See [ARCHITECTURE_DASHBOARD.md](./ARCHITECTURE_DASHBOARD.md) for the full v2 design, component responsibilities, and the trade-offs behind each choice — kept as its own document, separate from `ARCHITECTURE.md` (v1), so the two systems stay easy to reason about independently.
 
 Status: 🔜 in progress.
 

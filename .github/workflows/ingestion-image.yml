@@ -1,0 +1,71 @@
+name: Ingestion Image
+
+# Path-filtered: only the ingestion Dockerfile and the source it COPYs in actually affect the
+# built image, so unrelated changes (docs, other pipeline stages, etc.) don't trigger a rebuild.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infrastructure/docker/ingestion/Dockerfile"
+      - "src/**"
+      - "pipeline/ingestion/**"
+  pull_request:
+    paths:
+      - "infrastructure/docker/ingestion/Dockerfile"
+      - "src/**"
+      - "pipeline/ingestion/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ingestion image
+        run: docker build -f infrastructure/docker/ingestion/Dockerfile -t flight-search-ingestion:ci .
+
+      # Runs the real entrypoint dispatch (check-gcs) without real GCS credentials, so it's
+      # expected to report "inaccessible" (exit 1) rather than "reachable" (exit 0) — either is
+      # a pass, since both mean the entrypoint's argument dispatch worked. What this actually
+      # catches is the class of bug hit in development: a caller that doesn't supply the args
+      # main() expects crashes with an unhandled IndexError/traceback, not a clean exit code —
+      # and that traceback is what this step fails on.
+      - name: Smoke test entrypoint dispatch
+        run: |
+          set +e
+          output=$(docker run --rm flight-search-ingestion:ci check-gcs 2>&1)
+          exit_code=$?
+          set -e
+          echo "$output"
+          if echo "$output" | grep -q "Traceback"; then
+            echo "::error::Entrypoint crashed with an unhandled exception — see output above."
+            exit 1
+          fi
+          if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 1 ]; then
+            echo "::error::Unexpected exit code: $exit_code"
+            exit 1
+          fi
+
+      # Only push on an actual push to main — a pull_request run only needs to prove the image
+      # still builds and the entrypoint still dispatches correctly, not publish anything.
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and push
+        if: github.event_name == 'push'
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          image="ghcr.io/$owner/flight-search-ingestion"
+          short_sha="${GITHUB_SHA:0:7}"
+          docker tag flight-search-ingestion:ci "$image:$short_sha"
+          docker tag flight-search-ingestion:ci "$image:latest"
+          docker push "$image:$short_sha"
+          docker push "$image:latest"

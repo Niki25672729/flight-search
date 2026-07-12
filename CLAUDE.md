@@ -20,7 +20,7 @@ See ARCHITECTURE.md for full design decisions.
 | Ryanair client | ryanair-py           | 3.0.0                               |
 | HTTP           | requests             | latest (transitive, via ryanair-py) |
 | Table display  | rich                 | latest                              |
-| Cloud cache    | google-cloud-storage | `cache.py` checks GCS first, falling back to the local file cache if GCS is unreachable — see ARCHITECTURE.md/ARCHITECTURE_PIPELINE.md |
+| Cloud cache    | google-cloud-storage | `cache.py` checks GCS first, falling back to the local file cache if GCS is unreachable — see ARCHITECTURE.md/ARCHITECTURE_DASHBOARD.md |
 | Test runner    | pytest               | latest                              |
 | Linter         | ruff                 | latest                              |
 | Formatter      | ruff format          | latest                              |
@@ -33,7 +33,7 @@ See ARCHITECTURE.md for full design decisions.
 | HTML parser     | beautifulsoup4 | For scraping easyJet, Wizz Air, etc. |
 | Browser scraper | playwright     | For JS-heavy airline sites. Tried and removed for Ryanair itself (2026-07-07) — the endpoint it was working around (`booking/v4/availability`) isn't used anymore; ryanair-py's plain-`requests` session works fine for the endpoint actually used (`farfnd/v4/oneWayFares`) |
 
-**v2 pipeline (planned, see ARCHITECTURE_PIPELINE.md — does not affect v1 CLI):**
+**v2 pipeline (planned, see ARCHITECTURE_DASHBOARD.md — does not affect v1 CLI):**
 
 | Layer             | Technology                    | Notes                                                                               |
 |-------------------|-------------------------------|-------------------------------------------------------------------------------------|
@@ -99,14 +99,14 @@ uv run mypy src/ pipeline/
 │   ├── terraform/                  # IaC — GCS bucket + service account (impersonation, no downloaded keys)
 │   ├── docker/                     # Dockerfiles for each per-task container
 │   └── airflow/                    # Orchestration — Airflow DAG, runs locally via Docker Compose
-├── pipeline/                       # v2, planned — see ARCHITECTURE_PIPELINE.md
+├── pipeline/                       # v2, planned — see ARCHITECTURE_DASHBOARD.md
 │   ├── ingestion/                  # Calls src/scraper.py, writes to GCS bronze
 │   ├── processing/                 # PySpark: bronze → silver
 │   └── transform/                  # dbt Core project: silver → gold
 ├── dashboards/
 │   └── looker/                     # v2, planned — Looker Studio dashboard, connected directly to BigQuery
 ├── ARCHITECTURE.md                 # v1 design
-├── ARCHITECTURE_PIPELINE.md        # v2 design
+├── ARCHITECTURE_DASHBOARD.md       # v2 design
 ├── CLAUDE.md
 └── pyproject.toml
 ```
@@ -179,5 +179,5 @@ Always leave 2 blank lines before a function def, regardless of section/subsecti
 - Always use the `Flight` dataclass from `models.py` — never use raw dicts for flight data.
 - Handle scraping failures gracefully — log the error and return empty list, never raise.
 - When working in `pipeline/` or `dashboards/` (v2), never modify `src/` behaviour or its CLI output — v1 must keep working standalone. Import from `src/`, don't duplicate it.
-- `cache.py` checks GCS first (falling back to the local file cache only if GCS itself is unreachable, not merely stale) — see ARCHITECTURE.md/ARCHITECTURE_PIPELINE.md. Don't regress this to a local-only check.
+- `cache.py` checks GCS first (falling back to the local file cache only if GCS itself is unreachable, not merely stale) — see ARCHITECTURE.md/ARCHITECTURE_DASHBOARD.md. Don't regress this to a local-only check.
 - Summarise what changed and why at the end of each session.

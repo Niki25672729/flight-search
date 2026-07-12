@@ -4,7 +4,7 @@
 
 A Python CLI tool that searches for budget flights from a European departure airport within a given time range and budget. It scrapes budget airline websites, caches results daily, and displays results as a table. A web interface is also planned for a future version.
 
-> This document covers v1 (the CLI). v2 — a data engineering pipeline and Looker Studio dashboard built on top of the same scraper — is documented separately in [ARCHITECTURE_PIPELINE.md](./ARCHITECTURE_PIPELINE.md). v1 stays fully functional; v2 is purely additive and lives in its own doc so the two systems don't get tangled together.
+> This document covers v1 (the CLI). v2 — a data engineering pipeline and Looker Studio dashboard built on top of the same scraper — is documented separately in [ARCHITECTURE_DASHBOARD.md](./ARCHITECTURE_DASHBOARD.md). v1 stays fully functional; v2 is purely additive and lives in its own doc so the two systems don't get tangled together.
 
 ## CLI Usage
 
@@ -119,7 +119,7 @@ User────▶│   Entry Point    │────────────�
 
 | Field          | Value                                                                        |
 |----------------|------------------------------------------------------------------------------|
-| Responsibility | Checks GCS first for flight data cache (daily TTL, since scraping runs daily). On a miss, the caller scrapes and writes the result back to GCS. Falls back entirely to the local filesystem cache if GCS itself is unreachable (network/auth error — not just a normal miss); see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
+| Responsibility | Checks GCS first for flight data cache (daily TTL, since scraping runs daily). On a miss, the caller scrapes and writes the result back to GCS. Falls back entirely to the local filesystem cache if GCS itself is unreachable (network/auth error — not just a normal miss); see ARCHITECTURE_DASHBOARD.md's "Shared GCS Cache Convention" |
 | Inputs         | Departure airport (IATA code), airline, and today's date (`yyyymmdd` string) |
 | Outputs        | List of `Flight` objects on cache hit, `None` on cache miss or expiry        |
 | Key files      | `cache.py`                                                                   |
@@ -189,7 +189,7 @@ seats_left: int | None = None   # airline's reported seats/fares left; None = no
 scraped_at: datetime            # when THIS record was captured (defaults to now)
 ```
 
-Cache files (GCS-first, these are the local fallback paths — see "Shared GCS Cache Convention" in ARCHITECTURE_PIPELINE.md):
+Cache files (GCS-first, these are the local fallback paths — see "Shared GCS Cache Convention" in ARCHITECTURE_DASHBOARD.md):
 - `cache/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` — list of Flight objects, 1 day TTL (scraping runs daily)
 
 ## Airport Data Reconciliation
@@ -236,7 +236,7 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 017 | Extend `Flight` with `origin_iata`, `flight_number`, `seats_left`, `currency`, `scraped_at`      | Keep v1's minimal Flight fields                                                | Needed for daily scraping and historical price-trend analysis (also consumed by the v2 pipeline); `seats_left` is currently always `None` since decision #16's data source doesn't provide it |
 | 018 | No `Route` dataclass — dropped entirely, not kept for future use (supersedes an earlier `Route` dataclass that briefly existed in `scraper.py`, never in `models.py`) | Keep a dormant `Route` dataclass around for a future airline integration that might need route-discovery data | Decision #16 dropped route discovery entirely (destinations are a side effect of each day's cheapest-fares query); keeping an unused model around for a hypothetical future need is speculative — a future airline that genuinely needs route data can reintroduce it then, informed by that airline's actual API shape |
 | 019 | Split airport discovery into `unknown_airports.json` (not in lookup) vs `ambiguous_airports.json` (in lookup, but data disagrees), and add `ignored_airports.json` to suppress known non-EU/out-of-scope codes | Single `unknown_airports.json` for all cases; silently drop unrecognised codes | Distinguishes genuinely new airports from data-mismatches needing reconciliation, and stops known out-of-scope codes from being re-logged on every scrape |
-| 020 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency                                       | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_PIPELINE.md's "Shared GCS Cache Convention" |
+| 020 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency                                       | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_DASHBOARD.md's "Shared GCS Cache Convention" |
 | 021 | Flight cache TTL changed from 1 week to 1 day (supersedes decision #3)                           | Keep 1-week TTL                                                                | Scraping now runs daily; a 1-week TTL would skip re-scraping for 6 of every 7 days, defeating the point of a daily schedule |
 | 022 | `cache.py`'s read/write and retry-queue functions take today's date as an explicit `yyyymmdd` string parameter, computed once by the caller, instead of each function calling `_utc_now()` internally | Each function computes its own `now()` internally                              | One `now()` read per logical operation avoids the GCS attempt and local fallback ever resolving to different dates at a midnight boundary; also lets the day-scoped path (#10) be built without re-deriving the date in multiple places |
 

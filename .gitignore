@@ -19,6 +19,9 @@ logs/
 *.tfstate.*
 terraform.tfvars
 
+# Docker Compose env vars (FLIGHT_SEARCH_GCS_BUCKET, GOOGLE_CLOUD_PROJECT)
+.env
+
 # Ignored airports, not required
 src/ignored_airports.json
 # Ambiguous airports (reviewed and merged manually into eu_airports.json)

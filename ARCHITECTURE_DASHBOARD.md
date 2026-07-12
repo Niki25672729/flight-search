@@ -136,11 +136,23 @@ v1 and v2 read/write the same GCS bronze paths, but each with different intent:
 
 This lets an on-demand CLI search and the scheduled pipeline share scrape cost instead of duplicating it, while keeping each system's failure mode independent: the CLI never needs GCS to function, and the pipeline never depends on the CLI having been run.
 
+## Retry Strategy
+
+Failures are retried at two different layers — Airflow task retries and an in-process, CAS-protected code-level retry queue — rather than either one alone.
+
+**Why not one Airflow task per (origin, date)?** Task granularity follows the origin, not the (origin, date) pair. Mapping one task per (origin, date) would multiply `SCRAPE_ORIGINS` (49) by `SCRAPE_BUFFER_DAYS` (~97) into ~4,750 task instances per DagRun — unmanageable to read, monitor, or debug in the Airflow UI, and far more scheduler overhead than the work justifies. One task per origin keeps the graph at 49 mapped instances; `scrape_ryanair()` loops the ~97 days in-process instead.
+
+**Why not rely only on Airflow's task-level retry?** Follows directly from the above: since a single date isn't its own task, a single failed day within one origin's scrape has no Airflow task of its own to retry. Without the code-level retry queue, the only way to recover one failed day would be to fail the *entire* task and let Airflow rerun the whole ~97-day scrape for that origin — multiplying API calls ~97x to recover a single day, worsening exactly the rate-limiting/`403` risk this is meant to mitigate.
+
+**Why not rely only on code-level retry?** The retry queue only runs while the container's process is alive — it can't recover from the container itself dying (crash, OOM, `execution_timeout`, an unreachable Docker socket). Something outside the process has to notice and relaunch it; that's Airflow's task-level retry (with exponential backoff, capped at `max_retry_delay`). Code-level and Airflow-level retry cover disjoint failure modes: one failed HTTP call mid-scrape vs. the whole process dying.
+
+**Where CAS fits in.** GCS's compare-and-swap write (`if_generation_match`) isn't a retry mechanism — it protects the two retry layers above from corrupting each other's output. A zombie container (killed by Airflow but still alive and writing) can race a freshly-retried container for the same origin's cache/retry-queue blob; CAS is what stops one writer from silently clobbering a newer write, a problem neither retry layer has any mechanism to prevent on its own.
+
 ## Key Design Decisions
 
 | #   | Decision                                                                                             | Alternatives considered                                                | Rationale                                                       |
 |-----|------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|-----------------------------------------------------------------|
-| 001 | v2 lives in the same repo as v1, as an additive `pipeline/`, `dashboards/`, and `infrastructure/` layer, documented in a separate file | Single combined ARCHITECTURE.md; separate repository                   | Shares `src/` and repo-wide conventions (CLAUDE.md, CI, dependency management) with v1 instead of duplicating them across two repos, while separate doc files (`ARCHITECTURE.md` vs `ARCHITECTURE_PIPELINE.md`) keep each system's design reasoning independently readable without cross-referencing every decision |
+| 001 | v2 lives in the same repo as v1, as an additive `pipeline/`, `dashboards/`, and `infrastructure/` layer, documented in a separate file | Single combined ARCHITECTURE.md; separate repository                   | Shares `src/` and repo-wide conventions (CLAUDE.md, CI, dependency management) with v1 instead of duplicating them across two repos, while separate doc files (`ARCHITECTURE.md` vs `ARCHITECTURE_DASHBOARD.md`) keep each system's design reasoning independently readable without cross-referencing every decision |
 | 002 | Terraform provisions the GCS bucket and service account (`infrastructure/terraform/`)                | Manual setup via `gcloud`/console                                      | Reproducible, versioned, self-documenting infra; matches the free-tier setup exactly and can be torn down/recreated without manual steps |
 | 003 | Developer impersonates the service account (`roles/iam.serviceAccountTokenCreator`) rather than a downloaded key | Downloaded service account key (`.json`)                             | Org policy blocks key creation; impersonation avoids a long-lived credential file to protect entirely |
 | 004 | Each pipeline task (ingestion, processing, transform) runs in its own container                      | One container for everything; isolate every task uniformly ("one process per container" as a blanket rule) | Isolation is warranted by a real discriminator — a different runtime (PySpark needs a JVM) or a dependency-conflict risk with Airflow's own pinned packages (`dbt-core`, `ryanair-py`/`google-cloud-storage` version pins) — not by isolating for its own sake |
@@ -158,6 +170,7 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 | 016 | Silver is exposed to BigQuery as an external table over GCS, not loaded into a native table          | Native GCS → BigQuery load job before each `dbt run`                   | An external table is a near-free DDL pointer, not a data-moving job; `dbt run` already does the real read-and-transform work when it queries the external table and materializes gold, so a separate load step would just be redundant data movement |
 | 017 | dbt Core (not dbt Cloud)                                                                             | dbt Cloud free tier                                                    | No login/seat limits; Airflow already handles scheduling for the whole pipeline, so dbt Cloud's built-in scheduler isn't needed |
 | 018 | Looker Studio dashboard, connected directly to BigQuery                                              | Tableau Public (+ Sheets export), Power BI Desktop                     | Native BigQuery connector needs no export/bridge step, unlike Tableau Public which can't connect to BigQuery directly; free, and its sharing model supports both public links and restricted access, unlike Tableau Public (public-only) or Power BI Desktop (no live link without a paid Service license) |
+| 019 | CI (`.github/workflows/ingestion-image.yml`) builds and pushes the ingestion image to GHCR on every relevant push to `main`, but local Docker Compose/Airflow keep building `:dev` locally rather than pulling from GHCR | Switch local Docker Compose/DAG to pull the GHCR image instead of building locally | Pulling from GHCR would slow local iteration (commit → push → wait for CI → pull, vs. an immediate local rebuild) for no benefit while the pipeline is still under active development. Revisit once v2 (processing/transform/dashboard) is finished and local iteration speed matters less than running a CI-verified image |
 
 ## External Dependencies
 
@@ -198,6 +211,12 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 - [ ] Data quality checks: beyond `dbt test` on gold, does bronze/silver need its own validation (row counts, null checks, schema drift) before promoting to the next layer?
 - [ ] Monitoring/alerting: how are task failures, data staleness, or the `status.json` scrape-task summary surfaced — Airflow's own UI only, or something more (email/Slack alert)?
 - [ ] Logging: what's the logging strategy across containers — structured logs, centralized collection, or just each container's stdout captured by Airflow?
+- [ ] Failure management: `ingest_airport`/`scrape_ryanair` currently produce several distinct partial-failure shapes, each recovered differently today — is there a more elegant, unified way to handle them?
+  1. Scrape returns empty (every date failed) — every date gets recorded to the retry queue; `ingest_airport` returns `False`
+  2. Scrape returns a partial result (some dates failed) — only the failed dates get recorded to the retry queue; `ingest_airport` still returns `True`
+  3. The scrape process itself fails (crash/timeout) after recording some dates to the retry queue but before returning — partial retry-queue state, task fails
+  4. The scrape process itself fails before recording anything to the retry queue — task fails, no retry-queue state at all, that run's failed dates are unrecoverable
+- [ ] Ambiguous/unknown airport discovery doesn't survive the containerized pipeline: `AMBIGUOUS_AIRPORTS_PATH`/`UNKNOWN_AIRPORTS_PATH` (`config.py`) are local-filesystem-only paths, with no GCS-aware equivalent like the flight cache/retry queue have. Inside `ingest_flights`/`retry_failed_ingests` containers, a discovery is written to that container's own ephemeral filesystem and destroyed with it (`auto_remove="force"`, no volume mount back to the host) — it never reaches the git-tracked `src/` files for review. Even with a mount, concurrent containers (`max_active_tis_per_dagrun=5`) would race on a plain `open(path, "w")` write with no CAS protection, unlike the cache/retry-queue writes. Only the v1 CLI / `manual_run.py`, run directly on a developer's machine, actually persist discoveries today.
 
 ---
 
@@ -205,7 +224,7 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 
 | ADR | Decision                                                                                          | Status   |
 |-----|---------------------------------------------------------------------------------------------------|----------|
-| 001 | v2 documented in a separate file (`ARCHITECTURE_PIPELINE.md`), own ADR numbering                  | Accepted |
+| 001 | v2 documented in a separate file (`ARCHITECTURE_DASHBOARD.md`), own ADR numbering                  | Accepted |
 | 002 | Terraform provisions the GCS bucket and service account                                           | Accepted |
 | 003 | Developer impersonates the service account instead of using a downloaded key                      | Accepted |
 | 004 | Container-per-task topology for the pipeline                                                      | Accepted |
@@ -224,3 +243,4 @@ This lets an on-demand CLI search and the scheduled pipeline share scrape cost i
 | 017 | Silver exposed to BigQuery as an external table, not loaded                                       | Accepted |
 | 018 | dbt Core (not dbt Cloud) for transformation                                                       | Accepted |
 | 019 | Looker Studio dashboard, connected directly to BigQuery                                           | Accepted |
+| 020 | CI builds/pushes the ingestion image to GHCR, but local Docker Compose/Airflow keep building `:dev` locally until v2 is finished | Accepted |
