@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from utils import _utc_now
+
 
 @dataclass
 class Flight:
@@ -19,7 +21,7 @@ class Flight:
     # --- Added for daily scraping + historical/price-trend analysis ---
     currency: str = "EUR"  # kept for completeness even though prices are normalised to EUR
     seats_left: int | None = None  # airline's reported seats/fares left; None = not reported by source
-    scraped_at: datetime = field(default_factory=datetime.now)  # when THIS record was captured
+    scraped_at: datetime = field(default_factory=_utc_now)  # when THIS record was captured
 
     def __str__(self) -> str:
         departure = self.departure_time.strftime("%Y-%m-%d %H:%M")

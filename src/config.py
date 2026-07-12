@@ -75,7 +75,6 @@ SCRAPE_ORIGINS = [
     # France
     "MRS",
     "NTE",
-    "BOD",
     "TLS",
     # UK (Ryanair's secondary-airport strongholds)
     "MAN",

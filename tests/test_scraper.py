@@ -377,27 +377,33 @@ def test_record_failed_query_does_not_duplicate(tmp_retry_queue_path):
 
 
 def test_retry_failed_queries_empty_queue_returns_empty(tmp_retry_queue_path):
-    """Tests that retrying an empty queue (explicit origin) is a no-op."""
+    """Tests that retrying an empty queue is a no-op."""
     result = retry_failed_queries(RUN_DATE, origin="EIN")
 
-    assert result == {}
+    assert result == ([], [])
 
 
-def test_retry_failed_queries_with_explicit_origin_recovers_flights_and_entries(
-    mocker, mock_ryanair_client, tmp_retry_queue_path
-):
+def test_retry_failed_queries_skips_ryanair_client_when_queue_empty(mocker, tmp_retry_queue_path):
+    """Tests that an empty queue never constructs a Ryanair client."""
+    mock_ryanair_cls = mocker.patch("scraper.Ryanair")
+
+    result = retry_failed_queries(RUN_DATE, origin="EIN")
+
+    assert result == ([], [])
+    mock_ryanair_cls.assert_not_called()
+
+
+def test_retry_failed_queries_recovers_flights_and_entries(mocker, mock_ryanair_client, tmp_retry_queue_path):
     """
-    Tests that a successful retry for an explicit origin returns the recovered flights/entries
-    for that origin, without writing anything back to the retry queue itself.
+    Tests that a successful retry returns the recovered flights/entries for the given origin,
+    without writing anything back to the retry queue itself.
     """
     _record_failed_query("EIN", date(2026, 8, 18), "ryanair", RUN_DATE)
     mocker.patch("scraper.time.sleep")
     mock_ryanair_client.get_cheapest_flights.return_value = [make_ryanair_py_flight(destination="BCN")]
 
-    result = retry_failed_queries(RUN_DATE, origin="EIN")
+    recovered_flights, recovered_entries = retry_failed_queries(RUN_DATE, origin="EIN")
 
-    assert list(result.keys()) == ["EIN"]
-    recovered_flights, recovered_entries = result["EIN"]
     assert len(recovered_flights) == 1
     assert recovered_flights[0].destination_iata == "BCN"
     assert recovered_entries == [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
@@ -406,70 +412,20 @@ def test_retry_failed_queries_with_explicit_origin_recovers_flights_and_entries(
     assert load_retry_queue("ryanair", "EIN", RUN_DATE) == [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
 
 
-def test_retry_failed_queries_with_explicit_origin_excludes_still_failing_entries(
-    mocker, mock_ryanair_client, tmp_retry_queue_path
-):
+def test_retry_failed_queries_excludes_still_failing_entries(mocker, mock_ryanair_client, tmp_retry_queue_path):
     """Tests that a query that still fails on retry is excluded from the returned recovered entries."""
     _record_failed_query("EIN", date(2026, 8, 18), "ryanair", RUN_DATE)
     mocker.patch("scraper.time.sleep")
     mock_ryanair_client.get_cheapest_flights.side_effect = Exception("still down")
 
-    result = retry_failed_queries(RUN_DATE, origin="EIN")
+    recovered_flights, recovered_entries = retry_failed_queries(RUN_DATE, origin="EIN")
 
-    recovered_flights, recovered_entries = result["EIN"]
     assert recovered_flights == []
     assert recovered_entries == []
     # still present, since retry_failed_queries never writes to the queue
     queue = load_retry_queue("ryanair", "EIN", RUN_DATE)
     assert len(queue) == 1
     assert queue[0]["origin_iata"] == "EIN"
-
-
-def test_retry_failed_queries_no_origin_skips_ryanair_client_when_all_queues_empty(mocker, tmp_retry_queue_path):
-    """Tests that omitting origin with nothing queued anywhere never constructs a Ryanair client."""
-    mocker.patch("scraper.SCRAPE_ORIGINS", ["EIN", "STN"])
-    mock_ryanair_cls = mocker.patch("scraper.Ryanair")
-
-    result = retry_failed_queries(RUN_DATE)
-
-    assert result == {}
-    mock_ryanair_cls.assert_not_called()
-
-
-def test_retry_failed_queries_no_origin_loops_over_all_origins_and_returns_per_origin_results(
-    mocker, mock_ryanair_client, tmp_retry_queue_path
-):
-    """Tests that omitting origin retries every origin in SCRAPE_ORIGINS and returns results keyed per origin."""
-    mocker.patch("scraper.SCRAPE_ORIGINS", ["EIN", "STN"])
-    mocker.patch("scraper.time.sleep")
-    _record_failed_query("EIN", date(2026, 8, 18), "ryanair", RUN_DATE)
-    _record_failed_query("STN", date(2026, 8, 19), "ryanair", RUN_DATE)
-    mock_ryanair_client.get_cheapest_flights.return_value = [make_ryanair_py_flight(destination="BCN")]
-
-    result = retry_failed_queries(RUN_DATE)
-
-    assert set(result.keys()) == {"EIN", "STN"}
-    assert len(result["EIN"][0]) == 1  # one recovered flight
-    assert len(result["STN"][0]) == 1
-    assert mock_ryanair_client.get_cheapest_flights.call_count == 2
-    # neither origin's queue was written to by retry_failed_queries itself
-    assert load_retry_queue("ryanair", "EIN", RUN_DATE) == [{"origin_iata": "EIN", "query_date": "2026-08-18"}]
-    assert load_retry_queue("ryanair", "STN", RUN_DATE) == [{"origin_iata": "STN", "query_date": "2026-08-19"}]
-
-
-def test_retry_failed_queries_no_origin_only_touches_origins_with_queued_entries(
-    mocker, mock_ryanair_client, tmp_retry_queue_path
-):
-    """Tests that an origin with an empty queue is never queried, even when looping all origins."""
-    mocker.patch("scraper.SCRAPE_ORIGINS", ["EIN", "STN"])
-    mocker.patch("scraper.time.sleep")
-    _record_failed_query("EIN", date(2026, 8, 18), "ryanair", RUN_DATE)
-    mock_ryanair_client.get_cheapest_flights.return_value = [make_ryanair_py_flight(destination="BCN")]
-
-    result = retry_failed_queries(RUN_DATE)
-
-    assert list(result.keys()) == ["EIN"]
-    mock_ryanair_client.get_cheapest_flights.assert_called_once_with("EIN", date(2026, 8, 18), date(2026, 8, 18))
 
 
 # ---------------------------

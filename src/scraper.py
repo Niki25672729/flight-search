@@ -12,7 +12,6 @@ from config import (
     UNKNOWN_AIRPORTS_PATH,
     DATE_FORMAT,
     SCRAPE_BUFFER_DAYS,
-    SCRAPE_ORIGINS,
     RYANAIR_CURRENCY,
     SCRAPE_REQUEST_DELAY_SECONDS,
 )
@@ -279,36 +278,30 @@ def scrape_ryanair(origin_airport: str, run_date: str) -> list[Flight]:
     return flights_data
 
 
-def retry_failed_queries(run_date: str, origin: str | None = None) -> dict[str, tuple[list[Flight], list[dict]]]:
+def retry_failed_queries(run_date: str, origin: str) -> tuple[list[Flight], list[dict]]:
     """
-    Re-attempts every failed query in the retry queue for `origin`, or every origin in
-    SCRAPE_ORIGINS if omitted. Does not write to the retry queue itself. Returns a dict of
-    {origin: (recovered_flights, recovered_entries)} for origins whose queue was non-empty.
+    Re-attempts every failed query in origin's retry queue. Does not write to the retry queue
+    itself. Returns (recovered_flights, recovered_entries), both empty if the queue was empty.
     """
-    origins_to_retry = [origin] if origin is not None else SCRAPE_ORIGINS
-
-    # Load every origin's queue before touching the network, so a fully-empty run (the
-    # common case) never even constructs a Ryanair client/session.
-    queues = {o: load_retry_queue("ryanair", o, run_date) for o in origins_to_retry}
-    queues = {o: q for o, q in queues.items() if q}
-    if not queues:
-        logging.info("Retry queue is empty — nothing to retry.")
-        return {}
+    # Loaded before touching the network, so an empty queue (the common case) never even
+    # constructs a Ryanair client/session.
+    queue = load_retry_queue("ryanair", origin, run_date)
+    if not queue:
+        logging.info(f"{origin}: retry queue is empty — nothing to retry.")
+        return [], []
 
     client = Ryanair(currency=RYANAIR_CURRENCY)
-    results: dict[str, tuple[list[Flight], list[dict]]] = {}
     resolved: dict[str, dict[str, str]] = {}
     skipped: set[str] = set()
     ambiguous_found: dict[str, dict[str, str]] = {}
     unknown_found: dict[str, dict[str, str]] = {}
 
-    for single_origin, queue in queues.items():
-        results[single_origin] = _retry_origin_queue(
-            single_origin, queue, client, resolved, skipped, ambiguous_found, unknown_found
-        )
+    recovered_flights, recovered_entries = _retry_origin_queue(
+        origin, queue, client, resolved, skipped, ambiguous_found, unknown_found
+    )
 
     _save_unknown_and_ambiguous_findings(ambiguous_found, unknown_found)
-    return results
+    return recovered_flights, recovered_entries
 
 
 def confirm_recovered(airline: str, origin: str, run_date: str, recovered_entries: list[dict]) -> None:
