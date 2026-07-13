@@ -122,3 +122,33 @@ def tmp_retry_queue_path(tmp_path, mocker):
     return tmp_path / LOCAL_RETRY_CACHE_SUBPATH.format(
         airline="ryanair", origin="EIN", yyyymmdd=FROZEN_NOW.strftime(DATE_FORMAT)
     )
+
+
+@pytest.fixture
+def mock_read_cache(mocker):
+    """
+    Mocks cache.read_cache as imported by flight_search.py, run.py, and report.py -- all three
+    aliased to the same underlying cache.read_cache, so each import site is patched to the same
+    Mock object (patching cache.read_cache itself wouldn't affect any of them, since mock.patch
+    has to hit the point of use, not the definition). Defaults to None (cache miss): some
+    report.py tests rely on this default directly, without setting it explicitly, for their
+    "no cache data at all" scenarios.
+    """
+    mock = mocker.patch("flight_search.read_cache", return_value=None)
+    mocker.patch("run.read_cache", new=mock)
+    mocker.patch("report.read_cache", new=mock)
+    return mock
+
+
+@pytest.fixture
+def mock_load_retry_queue(mocker):
+    """Mocks cache.load_retry_queue as imported by report.py. Defaults to an empty queue."""
+    return mocker.patch("report.load_retry_queue", return_value=[])
+
+
+@pytest.fixture
+def mock_scrape_origins(mocker):
+    """Patches SCRAPE_ORIGINS down to two origins in manual_run.py and report.py, so tests don't
+    loop over the real ~49."""
+    mocker.patch("manual_run.SCRAPE_ORIGINS", ["EIN", "STN"])
+    mocker.patch("report.SCRAPE_ORIGINS", ["EIN", "STN"])

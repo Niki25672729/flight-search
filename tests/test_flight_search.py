@@ -11,12 +11,6 @@ from flight_search import filter_flights, main
 
 
 @pytest.fixture
-def mock_read_cache(mocker):
-    """Mocks cache.read_cache."""
-    return mocker.patch("flight_search.read_cache")
-
-
-@pytest.fixture
 def mock_write_cache(mocker):
     """Mocks cache.write_cache."""
     return mocker.patch("flight_search.write_cache")

@@ -21,6 +21,7 @@ GCS_BUCKET_NAME = os.environ.get("FLIGHT_SEARCH_GCS_BUCKET", "")
 CLOUD_CACHE_ROOT = "bronze"
 CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{yyyymm}}/{{dd}}"
 CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/retry/retry_{{origin}}_{{yyyymmdd}}.json"
+CLOUD_REPORT_PATH = f"{CLOUD_FLIGHT_CACHE_DIR}/{FLIGHT_STATUS_FILENAME}"
 
 
 # ---------------------------

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "CLI tool for searching flights"
 requires-python = ">=3.12"
 dependencies = [
-    "rich>=14.3.2",
+    "rich>=13.7.0,<14",
     "google-cloud-storage>=2.18.0",
     "ryanair-py==3.0.0",
 ]
@@ -22,6 +22,12 @@ dev = [
     "mypy",
 ]
 
+airflow = [
+    "apache-airflow==2.10.3",
+    "apache-airflow-providers-docker>=3.14.0",
+    "google-re2==1.1.20240702",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
@@ -30,7 +36,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "pipeline/ingestion", "infrastructure/airflow/dags"]
 tmp_path_retention_policy = "failed"
 
 [tool.ruff]

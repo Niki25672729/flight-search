@@ -14,10 +14,11 @@ from cache import (
     update_cache,
     load_retry_queue,
     update_retry_queue,
+    write_run_report,
     _serialize_datetime,
     _get_gcs_bucket,
 )
-from config import DATE_FORMAT, FLIGHT_CACHE_FILENAME
+from config import CLOUD_REPORT_PATH, DATE_FORMAT, FLIGHT_CACHE_FILENAME
 from models import Flight
 from conftest import (
     FROZEN_NOW,
@@ -482,6 +483,59 @@ def test_update_cache_falls_back_to_local_when_gcs_unreachable(mocker, tmp_cache
         loaded_data = json.load(f)
     assert [flight["destination_iata"] for flight in loaded_data] == ["EXISTING", SAMPLE_FLIGHT_BCN.destination_iata]
     assert "GCS unreachable for ryanair-EIN" in caplog.text
+
+
+# ---------------------------
+# Tests for write_run_report
+# ---------------------------
+
+
+def test_write_run_report_uploads_json_to_gcs(mock_gcs_bucket):
+    """Tests that write_run_report uploads the report dict as JSON to the expected status.json blob."""
+    report = {"run_date": "20260712", "aggregate": {"flights": 10}, "origins": []}
+
+    result = write_run_report("ryanair", "20260712", report)
+
+    expected_blob_name = CLOUD_REPORT_PATH.format(airline="ryanair", yyyymm="202607", dd="12")
+    mock_gcs_bucket.blob.assert_called_once_with(expected_blob_name)
+    mock_blob = mock_gcs_bucket.blob.return_value
+    mock_blob.upload_from_string.assert_called_once()
+    uploaded_content = mock_blob.upload_from_string.call_args[0][0]
+    assert json.loads(uploaded_content) == report
+    assert mock_blob.upload_from_string.call_args.kwargs["content_type"] == "application/json"
+    assert result is True
+
+
+def test_write_run_report_returns_false_and_logs_warning_on_upload_failure(mock_gcs_bucket, caplog):
+    """
+    Tests that an upload failure is caught, logged, and returns False -- never raises, since
+    generate_run_report's own "never fails the task" contract must hold regardless of whether
+    this write lands.
+    """
+    mock_gcs_bucket.blob.return_value.upload_from_string.side_effect = Exception("boom")
+
+    with caplog.at_level(logging.WARNING):
+        result = write_run_report("ryanair", "20260712", {"run_date": "20260712"})
+
+    assert result is False
+    assert "Failed to write run report for ryanair 20260712" in caplog.text
+
+
+def test_write_run_report_returns_false_when_gcs_unreachable_with_no_local_fallback(mocker, tmp_cache_dir, caplog):
+    """
+    Tests that GCS being entirely unreachable is also caught and returns False, with no local
+    fallback attempted -- unlike read_cache/write_cache, there's nowhere useful to fall back to:
+    the ingestion container has no host volume mount, so a local write would just be lost.
+    """
+    mocker.patch("cache.GCS_BUCKET_NAME", "test-bucket")
+    mocker.patch("cache.storage.Client", side_effect=Exception("connection refused"))
+
+    with caplog.at_level(logging.WARNING):
+        result = write_run_report("ryanair", "20260712", {"run_date": "20260712"})
+
+    assert result is False
+    assert "Failed to write run report for ryanair 20260712" in caplog.text
+    assert not os.listdir(tmp_cache_dir)
 
 
 # ---------------------------

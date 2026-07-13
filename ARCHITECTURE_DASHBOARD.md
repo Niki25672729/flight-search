@@ -69,14 +69,14 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 | Key files      | `infrastructure/docker/{task}/Dockerfile`                                          |
 | External calls | None (local Docker builds)                                                         |
 
-### `infrastructure/airflow/` (TBD)
+### `infrastructure/airflow/`
 
 | Field          | Value                                                                     |
 |----------------|---------------------------------------------------------------------------|
-| Responsibility | Define the DAG (ingest → processing → transform) and run it on a schedule |
+| Responsibility | Define the DAG (ingest → retry → report today; processing/transform join once built), run it on a schedule, and alert on DagRun failure |
 | Inputs         | None (time-triggered)                                                     |
-| Outputs        | Pipeline run logs, task success/failure status, retries                   |
-| Key files      | `infrastructure/airflow/dags/flight_pipeline_dag.py`                      |
+| Outputs        | Pipeline run logs, task success/failure status, retries, a per-origin/aggregate ingestion summary, and an ERROR-level alert log line on DagRun failure (see Monitoring & Alerting) |
+| Key files      | `infrastructure/airflow/dags/flight_pipeline_dag.py`, `callbacks.py` (DagRun-failure alert) |
 | External calls | Docker Engine (via `DockerOperator`)                                      |
 
 ### `pipeline/ingestion/`
@@ -85,7 +85,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 |----------------|--------------------------------------------------------------------------------------------------|
 | Responsibility | `ingest_airport` calls v1's scraper (`src/scraper.py`) per configured airport and writes bronze to GCS<br>`retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue and merges recovered flights |
 | Inputs         | `SCRAPE_ORIGINS` (hardcoded in `src/config.py` — see decision #008)                              |
-| Outputs        | Raw availability data written to GCS as NDJSON. Flights are partitioned daily as `bronze/flights/{airline}/{origin}/{YYYYMM}/{YYYYMMDD}.json`. |
+| Outputs        | Raw availability data written to GCS as NDJSON. Flights are partitioned daily as `bronze/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`. |
 | Key files      | `pipeline/ingestion/run.py` (scheduled entry point — one origin or `retry` per invocation, see Airflow DAG), `pipeline/ingestion/manual_run.py` (manual/hotfix CLI entry point) |
 | External calls | `scraper` (v1's `src/scraper.py`, imported directly), Google Cloud Storage                       |
 
@@ -122,7 +122,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ## Data Flow
 
 1. Airflow DAG triggers on schedule (e.g. daily)
-2. Task 1 — ingestion: one Airflow-mapped task per origin, each launching its own `pipeline/ingestion/run.py` container that calls `ingest_airport` for that origin and writes bronze to GCS; `retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue (invoked manually via `run.py retry` or `manual_run.py retry`, not yet part of the scheduled DAG)
+2. Task 1 — ingestion: one Airflow-mapped task per origin, each launching its own `pipeline/ingestion/run.py` container that calls `ingest_airport` for that origin and writes bronze to GCS; `retry_failed_ingests` then re-attempts previously failed {origin, date} pairs from the retry queue, followed by a reporting task that logs and persists a per-origin/aggregate summary of the run (see Monitoring & Alerting)
 3. Task 2 — PySpark job (`pipeline/processing/`) reads bronze flights, cleans/dedupes/types, writes silver (Parquet) to GCS
 4. Task 3 — `dbt run` (`pipeline/transform/`, via `dbt-bigquery`) queries silver through a BigQuery external table over the GCS path (a lightweight pointer, not a load job) and materializes gold star schema natively in BigQuery (exact schema TBD, pending dashboard requirements); `dbt test` validates it
 5. Looker Studio (`dashboards/looker/`) connects directly to the gold BigQuery tables (native connector, live or scheduled refresh) — no separate export step needed
@@ -148,6 +148,12 @@ Failures are retried at two different layers — Airflow task retries and an in-
 
 **Where CAS fits in.** GCS's compare-and-swap write (`if_generation_match`) isn't a retry mechanism — it protects the two retry layers above from corrupting each other's output. A zombie container (killed by Airflow but still alive and writing) can race a freshly-retried container for the same origin's cache/retry-queue blob; CAS is what stops one writer from silently clobbering a newer write, a problem neither retry layer has any mechanism to prevent on its own.
 
+## Monitoring & Alerting
+
+- **Alerting**: the DAG's `on_failure_callback` (`callbacks.py`) logs one ERROR-level line per failed DagRun, naming every failed task. No email/Slack delivery yet — deliberately deferred until a log line proves insufficient.
+- **Monitoring**: a reporting task logs (and persists to GCS) a per-origin and aggregate summary of each run — flight counts, query success rate, a day-over-day comparison — escalating to WARNING when any origin is partial or failed. It never fails the DagRun itself.
+- Both are covered by unit tests exercising the DAG's structure and callback/report logic directly, via a dedicated Airflow install (pyproject's `airflow` extra).
+
 ## Key Design Decisions
 
 | #   | Decision                                                                                             | Alternatives considered                                                | Rationale                                                       |
@@ -171,6 +177,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
 | 017 | dbt Core (not dbt Cloud)                                                                             | dbt Cloud free tier                                                    | No login/seat limits; Airflow already handles scheduling for the whole pipeline, so dbt Cloud's built-in scheduler isn't needed |
 | 018 | Looker Studio dashboard, connected directly to BigQuery                                              | Tableau Public (+ Sheets export), Power BI Desktop                     | Native BigQuery connector needs no export/bridge step, unlike Tableau Public which can't connect to BigQuery directly; free, and its sharing model supports both public links and restricted access, unlike Tableau Public (public-only) or Power BI Desktop (no live link without a paid Service license) |
 | 019 | CI (`.github/workflows/ingestion-image.yml`) builds and pushes the ingestion image to GHCR on every relevant push to `main`, but local Docker Compose/Airflow keep building `:dev` locally rather than pulling from GHCR | Switch local Docker Compose/DAG to pull the GHCR image instead of building locally | Pulling from GHCR would slow local iteration (commit → push → wait for CI → pull, vs. an immediate local rebuild) for no benefit while the pipeline is still under active development. Revisit once v2 (processing/transform/dashboard) is finished and local iteration speed matters less than running a CI-verified image |
+| 020 | DagRun-failure alerting logs a single line rather than emailing/paging; a separate always-succeeding task (not `retry_failed_ingests`) handles per-origin/aggregate reporting | SMTP/Slack integration in Docker Compose; folding stats into `retry_failed_ingests` | No mail server exists in the stack yet; a log line is a cheap floor, and a separate task keeps per-origin visibility without blocking retries |
 
 ## External Dependencies
 
@@ -208,8 +215,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
 
 - [ ] Dashboard analysis/design: what exact metrics, breakdowns, and visualizations does the dashboard need? Blocks the exact gold star schema (see `pipeline/transform/`)
 - [ ] Looker Studio vs. Tableau Public: is Looker Studio's visualization depth sufficient, or does the analysis need richer charting/interactivity that would justify the Tableau + Sheets-export trade-off instead?
-- [ ] Data quality checks: beyond `dbt test` on gold, does bronze/silver need its own validation (row counts, null checks, schema drift) before promoting to the next layer?
-- [ ] Monitoring/alerting: how are task failures, data staleness, or the `status.json` scrape-task summary surfaced — Airflow's own UI only, or something more (email/Slack alert)?
+- [ ] Data quality checks: a CI smoke test catches crash-level bugs in the ingestion image, but content-level validation (price bounds, null checks, anomaly detection) is still untouched, pending the dbt/gold layer
 - [ ] Logging: what's the logging strategy across containers — structured logs, centralized collection, or just each container's stdout captured by Airflow?
 - [ ] Failure management: `ingest_airport`/`scrape_ryanair` currently produce several distinct partial-failure shapes, each recovered differently today — is there a more elegant, unified way to handle them?
   1. Scrape returns empty (every date failed) — every date gets recorded to the retry queue; `ingest_airport` returns `False`
@@ -217,6 +223,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
   3. The scrape process itself fails (crash/timeout) after recording some dates to the retry queue but before returning — partial retry-queue state, task fails
   4. The scrape process itself fails before recording anything to the retry queue — task fails, no retry-queue state at all, that run's failed dates are unrecoverable
 - [ ] Ambiguous/unknown airport discovery doesn't survive the containerized pipeline: `AMBIGUOUS_AIRPORTS_PATH`/`UNKNOWN_AIRPORTS_PATH` (`config.py`) are local-filesystem-only paths, with no GCS-aware equivalent like the flight cache/retry queue have. Inside `ingest_flights`/`retry_failed_ingests` containers, a discovery is written to that container's own ephemeral filesystem and destroyed with it (`auto_remove="force"`, no volume mount back to the host) — it never reaches the git-tracked `src/` files for review. Even with a mount, concurrent containers (`max_active_tis_per_dagrun=5`) would race on a plain `open(path, "w")` write with no CAS protection, unlike the cache/retry-queue writes. Only the v1 CLI / `manual_run.py`, run directly on a developer's machine, actually persist discoveries today.
+- [ ] No dead-letter concept for the retry queue: a permanently-failing query retries forever with no signal it's stuck
 
 ---
 
@@ -244,3 +251,4 @@ Failures are retried at two different layers — Airflow task retries and an in-
 | 018 | dbt Core (not dbt Cloud) for transformation                                                       | Accepted |
 | 019 | Looker Studio dashboard, connected directly to BigQuery                                           | Accepted |
 | 020 | CI builds/pushes the ingestion image to GHCR, but local Docker Compose/Airflow keep building `:dev` locally until v2 is finished | Accepted |
+| 021 | DagRun-failure alerting logs one line; a separate task handles per-origin/aggregate reporting     | Accepted |

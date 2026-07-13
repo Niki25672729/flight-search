@@ -19,12 +19,6 @@ RUN_DATE = FROZEN_NOW.strftime(DATE_FORMAT)
 
 
 @pytest.fixture
-def mock_read_cache(mocker):
-    """Mocks cache.read_cache."""
-    return mocker.patch("run.read_cache")
-
-
-@pytest.fixture
 def mock_write_cache(mocker):
     """Mocks cache.write_cache. Defaults to True (write landed), matching the common case."""
     return mocker.patch("run.write_cache", return_value=True)
@@ -64,12 +58,6 @@ def mock_ingest_airport(mocker):
 def mock_retry_failed_ingests(mocker):
     """Mocks run.retry_failed_ingests."""
     return mocker.patch("manual_run.retry_failed_ingests")
-
-
-@pytest.fixture
-def mock_scrape_origins(mocker):
-    """Patches config.SCRAPE_ORIGINS down to two origins, so tests don't loop over the real ~49."""
-    mocker.patch("manual_run.SCRAPE_ORIGINS", ["EIN", "STN"])
 
 
 # ---------------------------
@@ -386,6 +374,24 @@ def test_run_main_exits_one_when_gcs_check_fails(mocker):
         run_main()
 
     assert exc_info.value.code == 1
+
+
+# --- report ---
+
+
+def test_run_main_dispatches_to_report(mocker):
+    """Tests that running with 'report' and a run_date calls generate_run_report and returns
+    without exiting non-zero — the report task must never fail the DagRun (see report.py)."""
+    mocker.patch("sys.argv", ["run.py", "report", RUN_DATE])
+    mock_report = mocker.patch("run.generate_run_report")
+    mock_ingest = mocker.patch("run.ingest_airport")
+    mock_retry = mocker.patch("run.retry_failed_ingests")
+
+    run_main()
+
+    mock_report.assert_called_once_with(RUN_DATE)
+    mock_ingest.assert_not_called()
+    mock_retry.assert_not_called()
 
 
 # ---------------------------

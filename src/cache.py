@@ -13,6 +13,7 @@ from config import (
     FLIGHT_CACHE_FILENAME,
     GCS_BUCKET_NAME,
     CLOUD_FLIGHT_CACHE_DIR,
+    CLOUD_REPORT_PATH,
     CLOUD_RETRY_QUEUE_PATH,
     LOCAL_FLIGHT_CACHE_DIR,
     LOCAL_RETRY_QUEUE_PATH,
@@ -320,6 +321,9 @@ def _update_gcs_retry_queue(airline: str, origin: str, date: str, mutate: Callab
 # ---------------------------
 
 
+# --- Cache ---
+
+
 def read_cache(departure_airport: str, airline: str, date: str) -> list[Flight] | None:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
@@ -361,6 +365,9 @@ def update_cache(
         _write_local_cache(departure_airport, airline, mutate(current), date)
 
 
+# --- Retry Queue ---
+
+
 def load_retry_queue(airline: str, origin: str, date: str) -> list[dict]:
     """
     Checks GCS first; falls back to the local file cache if GCS itself is unreachable
@@ -383,3 +390,28 @@ def update_retry_queue(airline: str, origin: str, date: str, mutate: Callable[[l
     except Exception as e:
         logging.warning(f"GCS unreachable for {airline}-{origin} retry queue ({e}); falling back to local cache.")
         _update_local_retry_queue(airline, origin, date, mutate)
+
+
+# --- Run Report ---
+
+
+def write_run_report(airline: str, date: str, report: dict) -> bool:
+    """
+    Best-effort write of generate_run_report's output (pipeline/ingestion/report.py) to GCS, for
+    later reference. No local fallback -- unlike read_cache/write_cache, the ingestion container
+    has no host volume mount (see MONITORING.md's ambiguous/unknown-airport-discovery gap for the
+    same problem with a different artifact), so a local write here would just land somewhere
+    nobody ever reads. Never raises: catches any exception, logs a warning, and returns False, so
+    generate_run_report's "never fails the task" contract holds regardless of whether this lands.
+    """
+    try:
+        bucket = _get_gcs_bucket()
+        blob_name = CLOUD_REPORT_PATH.format(airline=airline, yyyymm=date[:6], dd=date[6:8])
+        bucket.blob(blob_name).upload_from_string(
+            json.dumps(report, indent=2, ensure_ascii=False), content_type="application/json"
+        )
+        logging.info(f"Run report written to {blob_name}")
+        return True
+    except Exception as e:
+        logging.warning(f"Failed to write run report for {airline} {date}: {e}")
+        return False

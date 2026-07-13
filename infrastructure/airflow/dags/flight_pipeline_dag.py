@@ -5,6 +5,7 @@ from airflow import DAG
 from airflow.providers.docker.operators.docker import DockerOperator
 from docker.types import Mount
 
+from callbacks import log_dagrun_failure_alert
 from config import SCRAPE_ORIGINS
 
 
@@ -16,6 +17,7 @@ INGESTION_IMAGE = "flight-search-ingestion:dev"
 GCS_CREDENTIALS_TARGET = "/app/gcloud/application_default_credentials.json"
 TASK_EXECUTION_TIMEOUT = timedelta(minutes=30)
 CHECK_GCS_EXECUTION_TIMEOUT = timedelta(minutes=2)
+REPORT_EXECUTION_TIMEOUT = timedelta(minutes=5)
 COMMON_ENVIRONMENT = {
     "FLIGHT_SEARCH_GCS_BUCKET": os.environ["FLIGHT_SEARCH_GCS_BUCKET"],
     "GOOGLE_CLOUD_PROJECT": os.environ["GOOGLE_CLOUD_PROJECT"],
@@ -43,6 +45,7 @@ with DAG(
         "max_retry_delay": timedelta(minutes=30),
     },
     tags=["flight-search", "v2-pipeline"],
+    on_failure_callback=log_dagrun_failure_alert,
 ) as dag:
     # Ingestion would fallback to local storage if GCS is not accessible and loses data, so we need to check if it is.
     check_gcs_accessible = DockerOperator(
@@ -92,7 +95,25 @@ with DAG(
         mounts=COMMON_MOUNTS,
     ).expand(command=[["retry", origin, "{{ data_interval_end | ds_nodash }}"] for origin in SCRAPE_ORIGINS])
 
-    check_gcs_accessible >> ingest_flights >> retry_failed_ingests
+    # Purely informational -- reads already-written cache/retry-queue
+    # state for every origin and logs a per-origin + aggregate summary; never scrapes or writes, and
+    # always exits 0 regardless of origin outcomes, so it can never itself fail the DagRun (that would
+    # reopen exactly the all_done isolation retry_failed_ingests was set up to give each origin).
+    generate_run_report = DockerOperator(
+        task_id="generate_run_report",
+        image=INGESTION_IMAGE,
+        docker_url="unix://var/run/docker.sock",
+        network_mode="bridge",
+        mount_tmp_dir=False,
+        auto_remove="force",
+        execution_timeout=REPORT_EXECUTION_TIMEOUT,
+        trigger_rule="all_done",
+        command=["report", "{{ data_interval_end | ds_nodash }}"],
+        environment=COMMON_ENVIRONMENT,
+        mounts=COMMON_MOUNTS,
+    )
+
+    check_gcs_accessible >> ingest_flights >> retry_failed_ingests >> generate_run_report
 
     # processing (bronze -> silver) and transform (silver -> gold) tasks join here
     # once pipeline/processing/ and pipeline/transform/ exist (see ARCHITECTURE_DASHBOARD.md).

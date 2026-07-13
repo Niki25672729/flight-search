@@ -4,6 +4,7 @@ from datetime import datetime
 
 from cache import _CasExhausted, _get_gcs_bucket, read_cache, update_cache, write_cache
 from models import Flight
+from report import generate_run_report
 from scraper import confirm_recovered, retry_failed_queries, scrape_ryanair
 
 
@@ -132,6 +133,8 @@ def main() -> None:
       container.
     - ``run.py <origin> <run_date>``: ingests that single origin.
     - ``run.py retry <origin> <run_date>``: retries single's queue.
+    - ``run.py report <run_date>``: logs a per-origin + aggregate summary of run_date's ingestion
+      run (read-only, always exits 0 -- see report.generate_run_report).
     """
     origin_or_retry = sys.argv[1]
 
@@ -141,6 +144,11 @@ def main() -> None:
     if origin_or_retry == "retry":
         origin, run_date = sys.argv[2], sys.argv[3]
         retry_failed_ingests(run_date, origin=origin)
+        return
+
+    if origin_or_retry == "report":
+        run_date = sys.argv[2]
+        generate_run_report(run_date)
         return
 
     run_date = sys.argv[2]
