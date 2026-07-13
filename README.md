@@ -8,6 +8,8 @@ A Python CLI tool that finds budget flights from a European airport within your 
 
 ## Demo
 
+[![Open Dashboard](https://img.shields.io/badge/📊_Live_Dashboard-Open-blue?style=for-the-badge)](https://datastudio.google.com/s/rQv3xBI1Pr4)
+
 ```
 > python src/flight_search.py EIN 3m 50
 
