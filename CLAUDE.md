@@ -6,9 +6,9 @@
 
 ## Project Overview
 
-A Python CLI tool that searches for budget flights from a European departure airport within a given time range and budget. It scrapes budget airline websites, caches results locally for 1 day (daily scraping), and displays results as a table.
+A Python CLI tool that searches for budget flights from a European departure place (airport, city, or country) to an optional destination within a given date range and budget. It scrapes budget airline websites, caches results locally for 1 day (daily scraping), and displays results as a table.
 
-Entry point: `python src/flight_search.py [departure_airport] [timerange] [budget]`
+Entry point: `python src/flight_search.py [departure] [destination] [timerange] [budget] [sort]`
 
 See ARCHITECTURE.md for full design decisions.
 
@@ -38,7 +38,7 @@ See ARCHITECTURE.md for full design decisions.
 | Layer             | Technology                    | Notes                                                                               |
 |-------------------|-------------------------------|-------------------------------------------------------------------------------------|
 | IaC               | Terraform (`google` provider) | Provisions the GCS bucket + service account, see `infrastructure/terraform/`        |
-| Processing        | PySpark (local `local[*]`)    | No external cluster; runs in its own container                                     |
+| Processing        | PySpark (local `local[*]`)    | No external cluster; runs in its own container                                      |
 | Landing/warehouse | GCS, BigQuery                 | GCP free tier                                                                       |
 | Transform         | dbt Core (dbt-bigquery)       | Not dbt Cloud                                                                       |
 | Orchestration     | Apache Airflow                | Local via Docker Compose                                                            |
@@ -51,7 +51,7 @@ See ARCHITECTURE.md for full design decisions.
 uv sync --extra dev
 
 # Run the CLI
-uv run python src/flight_search.py EIN 1m 50
+uv run python src/flight_search.py EIN BCN 2026-10-01...2026-10-30 50 price
 
 # Run the full test suite
 uv run pytest

@@ -48,12 +48,25 @@ def _load_unknown_airports() -> dict:
         return {}
 
 
+def _build_name_to_airports(airport_details: dict) -> dict[str, list[str]]:
+    """Builds a lowercased city/country name → IATA codes reverse lookup (a name can map to several airports)."""
+    name_map: dict[str, list[str]] = {}
+    for iata, details in airport_details.items():
+        # A name can be both a city and a country (e.g. Luxembourg), so dedupe per name
+        for key in ("city", "country"):
+            airports = name_map.setdefault(details[key].lower(), [])
+            if iata not in airports:
+                airports.append(iata)
+    return name_map
+
+
 # ---------------------------
 # Constants
 # ---------------------------
 
 EU_AIRPORT_DETAILS = _load_eu_airports()
 EU_AIRPORTS = set(EU_AIRPORT_DETAILS.keys())
+NAME_TO_AIRPORTS = _build_name_to_airports(EU_AIRPORT_DETAILS)
 IGNORED_AIRPORT_DETAILS = _load_ignored_airports()
 IGNORED_AIRPORTS = set(IGNORED_AIRPORT_DETAILS.keys())
 

@@ -100,6 +100,10 @@ SCRAPE_REQUEST_DELAY_SECONDS = 2
 # ---------------------------
 
 MAX_TIMERANGE_MONTHS = 3
+CLI_DATE_FORMAT = "%Y-%m-%d"
+TIMERANGE_SEPARATOR = "..."
+DEFAULT_TIMERANGE_DAYS = 30
+SORT_MODES = ("date", "price")
 
 
 # ---------------------------

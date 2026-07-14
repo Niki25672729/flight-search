@@ -86,8 +86,7 @@ def test_display_flights_shows_na_for_missing_arrival_time(mock_console):
     destination_col_idx = column_names.index("Destination")
     arrival_col_idx = column_names.index("Arrival Time")
 
-    # display_flights sorts rows by country/city/time, so locate the dummy
-    # flight's row by its destination cell rather than assuming input order.
+    # Locate the dummy flight's row by its destination cell rather than assuming input order.
     destination_cells = table.columns[destination_col_idx]._cells
     dummy_row_idx = destination_cells.index("BCN, Unknown, Unknown")
 
@@ -138,3 +137,33 @@ def test_display_flights_table_has_correct_columns_with_arrival(mock_console):
     table = mock_console.print.call_args[0][0]
     column_names = [col.header for col in table.columns]
     assert column_names == ["Destination", "Airline", "Departure Time", "Arrival Time", "Price"]
+
+
+def test_display_flights_show_origin_prepends_departure_column(mock_console):
+    """Tests that show_origin adds a leading Departure column with each flight's origin airport."""
+    display_flights([SAMPLE_FLIGHT_BCN], show_origin=True)
+
+    table = mock_console.print.call_args[0][0]
+    column_names = [col.header for col in table.columns]
+    assert column_names[0] == "Departure"
+    assert table.columns[0]._cells[0] == "EIN"
+
+
+def test_display_flights_hides_departure_column_by_default(mock_console):
+    """Tests that the Departure column only appears for multi-airport searches (show_origin=True)."""
+    display_flights([SAMPLE_FLIGHT_BCN])
+
+    table = mock_console.print.call_args[0][0]
+    column_names = [col.header for col in table.columns]
+    assert "Departure" not in column_names
+
+
+def test_display_flights_preserves_caller_order(mock_console):
+    """Tests that rows keep the caller's order — sorting is filter_flights' job (sort modes), not display's."""
+    # Spain-before-Netherlands would be re-ordered if display still sorted internally.
+    display_flights([SAMPLE_FLIGHT_BCN, SAMPLE_FLIGHT_AMS])
+
+    table = mock_console.print.call_args[0][0]
+    destination_cells = table.columns[0]._cells
+    assert destination_cells[0] == "BCN, Barcelona, Spain"
+    assert destination_cells[1] == "AMS, Amsterdam, Netherlands"

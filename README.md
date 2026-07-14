@@ -11,31 +11,32 @@ A Python CLI tool that finds budget flights from a European airport within your 
 [![Open Dashboard](https://img.shields.io/badge/📊_Live_Dashboard-Open-blue?style=for-the-badge)](https://datastudio.google.com/s/rQv3xBI1Pr4)
 
 ```
-> python src/flight_search.py EIN 3m 50
+> python src/flight_search.py Eindhoven Italy 2026-08-05...2026-08-12 40 price
 
-2026-07-03 11:06:49 – INFO – Searching flights from EIN within 90 days and €50 budget...
-2026-07-03 11:06:49 – INFO – Cache hit for ryanair-EIN: Loaded EIN_20260703.json
-2026-07-03 11:06:49 – INFO – Found 31 flights matching criteria.
+2026-07-14 22:05:54 – INFO – Searching flights from EIN to AHO/AOI/BDS/BGY/BLQ/... between 2026-08-05 and 2026-08-12 within €40 budget...
+2026-07-14 22:05:57 – INFO – GCS cache hit for ryanair-EIN: loaded bronze/flights/ryanair/202607/14/EIN_20260714.json
+2026-07-14 22:05:57 – INFO – Found 13 flights matching criteria.
 
-                  Budget Flight Search Results
-┌──────────────────────────────┬─────────┬──────────────────┬────────┐
-│ Destination                  │ Airline │ Departure Time   │ Price  │
-├──────────────────────────────┼─────────┼──────────────────┼────────┤
-│ TIA, Tirana, Albania         │ Ryanair │ 2026-08-21 12:50 │ €19.99 │
-│ VIE, Vienna, Austria         │ Ryanair │ 2026-09-12 20:45 │ €23.99 │
-│ SOF, Sofia, Bulgaria         │ Ryanair │ 2026-09-16 15:40 │ €16.99 │
-│ ZAG, Zagreb, Croatia         │ Ryanair │ 2026-08-17 08:45 │ €19.99 │
-│ SKG, Thessaloniki, Greece    │ Ryanair │ 2026-08-23 13:30 │ €38.89 │
-└──────────────────────────────┴─────────┴──────────────────┴────────┘
+                Budget Flight Search Results
+┌────────────────────────────┬─────────┬──────────────────┬────────┐
+│ Destination                │ Airline │ Departure Time   │  Price │
+├────────────────────────────┼─────────┼──────────────────┼────────┤
+│ BLQ, Bologna, Italy        │ Ryanair │ 2026-08-09 19:30 │ €27.80 │
+│ BLQ, Bologna, Italy        │ Ryanair │ 2026-08-07 18:25 │ €28.91 │
+│ BGY, Milan Bergamo, Italy  │ Ryanair │ 2026-08-12 20:25 │ €35.07 │
+│ PSA, Pisa, Italy           │ Ryanair │ 2026-08-12 19:35 │ €24.99 │
+│ TSF, Venice Treviso, Italy │ Ryanair │ 2026-08-12 09:40 │ €25.99 │
+└────────────────────────────┴─────────┴──────────────────┴────────┘
 ```
 
 ---
 
 ## Features
 
-- **Simple CLI** — one command, three optional arguments
+- **Simple CLI** — one command, five optional arguments
+- **Flexible places** — departure and destination accept an airport IATA code, a city, or a whole country; partial names match when unambiguous (`Kingdom` → United Kingdom), typos get "did you mean" suggestions
 - **Smart caching** — scrapes once per day, checking GCS first then falling back to a local cache; instant results on repeat same-day runs
-- **Budget + timerange filtering** — only shows flights that fit your constraints, sorted by price
+- **Date range + destination + budget filtering** — exact travel dates, optional destination, and a price cap; sortable by date or price
 - **Colour-coded table** — easy to scan in the terminal via `rich`
 - **Unknown airport discovery** — new airports found during scraping are logged for review
 
@@ -93,37 +94,44 @@ No API key or account needed — the tool queries Ryanair's public fare-search e
 ## Usage
 
 ```bash
-python src/flight_search.py [departure_airport] [timerange] [budget]
+python src/flight_search.py [departure] [destination] [timerange] [budget] [sort]
 ```
 
-| Argument            | Format                   | Examples            | Default |
-|---------------------|--------------------------|---------------------|---------|
-| `departure_airport` | IATA code (EU only)      | `EIN`, `AMS`, `LHR` | `EIN`   |
-| `timerange`         | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m`    | `1m`    |
-| `budget`            | Integer (euros)          | `50`, `100`         | `50`    |
+| Argument      | Format                                                  | Examples                            | Default         |
+|---------------|---------------------------------------------------------|-------------------------------------|-----------------|
+| `departure`   | IATA code, city, or country (EU only)                   | `EIN`, `Eindhoven`, `Netherlands`   | `EIN`           |
+| `destination` | IATA code, city, or country; `none` = any destination   | `BCN`, `Barcelona`, `Spain`, `none` | `none`          |
+| `timerange`   | `yyyy-mm-dd...yyyy-mm-dd`, or a single `yyyy-mm-dd` day | `2026-10-01...2026-10-30`           | today + 30 days |
+| `budget`      | Integer (euros)                                         | `50`, `100`                         | `50`            |
+| `sort`        | `date` or `price` (ordering within each destination)    | `price`                             | `date`          |
+
+Departure and destination must be the same kind: IATA pairs with IATA, names (city/country) pair with names — `EIN Barcelona` is rejected, `Eindhoven Barcelona` works. A city or country covers **all** of its airports (e.g. `Paris` → CDG + ORY), and the results table gains a `Departure` column so rows stay traceable. Partial names resolve when they match exactly one place; typos fail with a "did you mean" suggestion rather than a silent guess.
 
 **Examples:**
 ```bash
-# Flights from Eindhoven in the next month under €50 (defaults)
+# Flights from Eindhoven to anywhere in the next 30 days under €50 (defaults)
 python src/flight_search.py
 
-# Flights from Amsterdam in the next 2 weeks under €75
-python src/flight_search.py AMS 2w 75
+# Amsterdam → Barcelona in the first two October weeks, under €75
+python src/flight_search.py AMS BCN 2026-10-01...2026-10-14 75
 
-# Flights from London Heathrow in the next 3 months under €100
-python src/flight_search.py LHR 3m 100
+# Eindhoven → anywhere in Italy on one specific day, cheapest first
+python src/flight_search.py Eindhoven Italy 2026-08-12 40 price
+
+# Partial country name — resolves to United Kingdom (all its airports)
+python src/flight_search.py Eindhoven Kingdom 2026-10-01...2026-10-30 60
 ```
 
 ---
 
 ## How It Works
 
-1. CLI arguments are parsed and validated (`cli.py`)
-2. Cache is checked for this departure airport (`cache.py`) — GCS first, falling back to the local cache if GCS is unreachable
+1. CLI arguments are parsed and validated (`cli.py`) — departure/destination resolve to airport codes (a city or country covers all of its airports)
+2. Cache is checked for each departure airport (`cache.py`) — GCS first, falling back to the local cache if GCS is unreachable
 3. **Cache hit** → load flights instantly from today's cached data
 4. **Cache miss** → scrape Ryanair for the cheapest fare per destination, per day, across the next 3 months + 1 week buffer (`scraper.py`), save to cache
-5. Filter by timerange and budget, sort by price (`flight_search.py`)
-6. Display results as a colour-coded terminal table (`display.py`)
+5. Filter by date range, destination, and budget; sort by date or price (`flight_search.py`)
+6. Display results as a colour-coded terminal table (`display.py`), with a `Departure` column when several origin airports were searched
 
 ---
 

@@ -9,24 +9,28 @@ A Python CLI tool that searches for budget flights from a European departure air
 ## CLI Usage
 
 ```bash
-python flight_search.py [departure_airport] [timerange] [budget]
+python flight_search.py [departure] [destination] [timerange] [budget] [sort]
 ```
 
 
-| Argument            | Format                   | Examples            | Default |
-|---------------------|--------------------------|---------------------|---------|
-| `departure_airport` | IATA code (EU only)      | `EIN`, `AMS`, `LHR` | `EIN`   |
-| `timerange`         | `{n}d` / `{n}w` / `{n}m` | `3d`, `2w`, `1m`    | `1m`    |
-| `budget`            | Integer (euros)          | `50`, `100`         | `50`    |
+| Argument      | Format                                                  | Examples                            | Default         |
+|---------------|---------------------------------------------------------|-------------------------------------|-----------------|
+| `departure`   | IATA code, city, or country (EU only)                   | `EIN`, `Eindhoven`, `Netherlands`   | `EIN`           |
+| `destination` | IATA code, city, or country; `none` = any destination   | `BCN`, `Barcelona`, `Spain`, `none` | `none`          |
+| `timerange`   | `yyyy-mm-dd...yyyy-mm-dd`, or a single `yyyy-mm-dd` day | `2026-10-01...2026-10-30`           | today + 30 days |
+| `budget`      | Integer (euros)                                         | `50`, `100`                         | `50`            |
+| `sort`        | `date` or `price` (ordering within each destination)    | `price`                             | `date`          |
 
+
+Departure and destination must be the same kind: IATA with IATA, or name (city/country) with name; `none` is neutral. A city/country resolves to all of its airports (see decision #23). Name matching is exact first, then unique substring (`Kingdom` → United Kingdom); ambiguous or misspelled input fails with the candidate list or a "did you mean" suggestion — never a silent guess.
 
 Max search range: 3 months.
 
 ## Goals & Non-Goals
 
 **Goals**
-- CLI interface: `python flight_search.py EIN 1m 50`
-- Validate IATA codes (European airports only)
+- CLI interface: `python flight_search.py EIN BCN 2026-10-01...2026-10-30 50 price`
+- Validate IATA codes (European airports only); resolve city/country names to their airports
 - Scrape budget airline websites for flight data — every flight per day so v2 can do flight analysis beyond simple budget search
 - Cache results (GCS-first, local fallback; 1 day TTL, timestamp in filename) — scraping runs daily
 - Display results as a table: destination (IATA code, city, country), airline, departure time, arrival time, price
@@ -80,8 +84,8 @@ User────▶│   Entry Point    │────────────�
 | Field          | Value                                         |
 |----------------|-----------------------------------------------|
 | Responsibility | Parse and validate CLI arguments              |
-| Inputs         | `departure_airport` (IATA code, EU only) `timerange` (e.g. `3d`=3 days, `2w`=2 weeks, `1m`=1 month) `budget` (euros) |
-| Outputs        | Validated params passed to `flight_search.py` |
+| Inputs         | `departure` (IATA code, city, or country — EU only) `destination` (same kinds, or `none` = any; must be the same kind as departure — IATA with IATA, name with name) `timerange` (`yyyy-mm-dd...yyyy-mm-dd`, or a single `yyyy-mm-dd` = that day) `budget` (euros) `sort` (`date` or `price`) |
+| Outputs        | Validated params passed to `flight_search.py` — places resolved to lists of airport codes |
 | Key files      | `cli.py`                                      |
 | External calls | None                                          |
 
@@ -109,7 +113,7 @@ User────▶│   Entry Point    │────────────�
 
 | Field          | Value                       |
 |----------------|-----------------------------|
-| Responsibility | Shared helpers — load `eu_airports.json`/`ignored_airports.json`, classify destination codes, write `unknown_airports.json`/`ambiguous_airports.json` (see [Airport Data Reconciliation](#airport-data-reconciliation)) |
+| Responsibility | Shared helpers — load `eu_airports.json`/`ignored_airports.json`, build the city/country name → airports lookup used by `cli.py`, classify destination codes, write `unknown_airports.json`/`ambiguous_airports.json` (see [Airport Data Reconciliation](#airport-data-reconciliation)) |
 | Inputs         | None                        |
 | Outputs        | Airport-related information |
 | Key files      | `utils.py`                  |
@@ -139,8 +143,8 @@ User────▶│   Entry Point    │────────────�
 
 | Field          | Value                                    |
 |----------------|------------------------------------------|
-| Responsibility | Format and print results as a rich table |
-| Inputs         | List of Flight objects                   |
+| Responsibility | Format and print results as a rich table, in the caller's order (sorting lives in `flight_search.py`'s sort modes) |
+| Inputs         | List of Flight objects; `show_origin` flag adding a `Departure` column when a search spans several origin airports |
 | Outputs        | Printed table to stdout                  |
 | Key files      | `display.py`                             |
 | External calls | None                                     |
@@ -157,9 +161,9 @@ User────▶│   Entry Point    │────────────�
 
 ## Data Flow
 
-1. User runs `python src/flight_search.py EIN 1m 50`
-2. `cli.py` validates airport (EU only), parses time range, validates budget
-3. `flight_search.py` computes today's date once (`yyyymmdd` string) and checks the cache for this departure airport/airline/date
+1. User runs `python src/flight_search.py Eindhoven Italy 2026-08-05...2026-08-12 40 price`
+2. `cli.py` resolves departure and destination to airport codes (see "CLI Usage" for the matching rules), parses the date range, validates budget and sort mode
+3. `flight_search.py` computes today's date once (`yyyymmdd` string) and, for each resolved departure airport, checks the cache for that airport/airline/date
 4. If flight cache hit → load flights from GCS (or the local fallback file) as list of Flight objects
 5. If flight cache miss or expired:
   1. `flight_search.py` calls `scraper.py` with departure airport
@@ -168,8 +172,8 @@ User────▶│   Entry Point    │────────────�
   4. Each result is converted into a `Flight` object — cheapest fare only, so `seats_left` and `arrival_time` are always `None`
   5. `scraper.py` returns the combined list of Flight objects; a single day's failed query is logged and skipped, not fatal to the whole scrape
 6. `flight_search.py` calls `cache.py` write method to save the scraped flights to GCS (or locally, if GCS is unreachable)
-7. `flight_search.py` filters flights by time range and budget, sorts by country, city, and time
-8. `display.py` prints filtered results as table
+7. `flight_search.py` merges all origin airports' flights, filters by date range, destination airports, and budget, then sorts per the sort mode — `date`: country, city, time; `price`: country, city, price, time
+8. `display.py` prints filtered results as table, prepending a `Departure` column when more than one origin airport was searched
 
 ## Data Model
 
@@ -239,6 +243,7 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 020 | v1 CLI checks GCS before scraping; falls back to the local file cache only if GCS is unreachable | Keep v1 fully local, no cloud dependency                                       | Lets an on-demand CLI search share scrape cost with the scheduled v2 pipeline (same GCS bronze layer) while still guaranteeing v1 works standalone with no GCP access — see ARCHITECTURE_DASHBOARD.md's "Shared GCS Cache Convention" |
 | 021 | Flight cache TTL changed from 1 week to 1 day (supersedes decision #3)                           | Keep 1-week TTL                                                                | Scraping now runs daily; a 1-week TTL would skip re-scraping for 6 of every 7 days, defeating the point of a daily schedule |
 | 022 | `cache.py`'s read/write and retry-queue functions take today's date as an explicit `yyyymmdd` string parameter, computed once by the caller, instead of each function calling `_utc_now()` internally | Each function computes its own `now()` internally                              | One `now()` read per logical operation avoids the GCS attempt and local fallback ever resolving to different dates at a midnight boundary; also lets the day-scoped path (#10) be built without re-deriving the date in multiple places |
+| 023 | CLI redesigned to `departure destination timerange budget sort`: places accept IATA code, city, or country (a name resolves to ALL its airports — matched exact first, then unique substring, else rejected with "did you mean" suggestions); destination `none` = any; timerange is exact dates `yyyy-mm-dd...yyyy-mm-dd` (single date = that one day), replacing relative `{n}d/w/m`; sort modes `date`/`price`; IATA and names can't be mixed between departure and destination; sorting moved out of `display.py` into `filter_flights` so the sort mode is respected, and a `Departure` column appears for multi-airport searches | Keep relative timerange formats alongside exact dates; fuzzy auto-accept of typos; strict per-kind matching (city only pairs with city); one origin airport per run | Exact dates match how trips are planned and one format keeps parsing unambiguous; substring matching is forgiving without ever silently guessing wrong (fail loud); city/country searches map naturally onto multiple origin airports, kept traceable via the origin column |
 
 
 ## External Dependencies
@@ -273,7 +278,7 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 - Max search range is 3 months
 - Prices may be stale up to 1 day due to caching (scraping runs daily)
 - Airline websites/APIs may change structure and break the scraper
-- Budget and time range are filter parameters applied after loading from cache, not scrape parameters
+- Destination, budget, and date range are filter parameters applied after loading from cache, not scrape parameters
 - `arrival_time` is always `None` for Ryanair — `ryanair-py`'s cheapest-fares endpoint doesn't provide it, not just "not all airlines provide it"
 - `seats_left` is always `None` for Ryanair (see decision #16) — the cheapest-fares endpoint doesn't expose it, unlike the abandoned per-flight availability approach
 - `currency` is always normalised to EUR at scrape time (via `Ryanair(currency="EUR")`) — the field is kept for completeness, not because non-EUR values are expected
@@ -340,3 +345,4 @@ Both auto-generated files are periodically reviewed and merged by hand: `unknown
 | 020 | Tried Playwright (real Chromium) for Ryanair to work around `booking/v4/availability` 409s | Superseded by 021                      |
 | 021 | Revert to `ryanair-py` (supersedes 010) — cheapest fare per destination per day via `farfnd/v4/oneWayFares`, no browser automation, no separate route-discovery step | Accepted                               |
 | 022 | Cache path restructured to day-scoped `{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json` (provide a place for v2's pipeline summary); date passed explicitly into cache/retry-queue functions instead of each calling `_utc_now()` | Accepted                               |
+| 023 | CLI v2: departure/destination as IATA/city/country with substring matching + suggestions, exact-date timerange (supersedes relative `{n}d/w/m`), destination filter, `date`/`price` sort modes | Accepted                               |
