@@ -1,6 +1,6 @@
 import logging
 import sys
-from datetime import datetime
+from datetime import date
 
 from cache import _CasExhausted, _get_gcs_bucket, read_cache, update_cache, write_cache
 from models import Flight
@@ -14,16 +14,12 @@ from scraper import confirm_recovered, retry_failed_queries, scrape_ryanair
 
 
 def _dedupe_flights(flights: list[Flight]) -> list[Flight]:
-    """
-    Collapses duplicate flights sharing the same (origin, destination, departure_time,
-    flight_number) natural key, keeping the row with the latest scraped_at. Needed because
-    retry_failed_ingests's merge step isn't itself idempotent — re-running it (e.g. after a
-    crash between the cache write and confirm_recovered) would otherwise append the same
-    recovered flight twice.
-    """
-    latest: dict[tuple[str, str, datetime, str | None], Flight] = {}
+    """Dedupes on the route-day key (origin, destination, departure DATE, airline) — silver's
+    flight_key grain — keeping the latest scraped_at, so a retry that observed a different
+    cheapest than the original scrape can't break the grain."""
+    latest: dict[tuple[str, str, date, str | None], Flight] = {}
     for flight in flights:
-        key = (flight.origin_iata, flight.destination_iata, flight.departure_time, flight.flight_number)
+        key = (flight.origin_iata, flight.destination_iata, flight.departure_time.date(), flight.airline)
         existing = latest.get(key)
         if existing is None or flight.scraped_at > existing.scraped_at:
             latest[key] = flight
