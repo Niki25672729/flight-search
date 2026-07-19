@@ -91,5 +91,22 @@ services:
     volumes:
       - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro
 
+  # Build with `docker-compose build processing`; run ad hoc with
+  # `docker-compose run --rm processing --run-date <yyyymmdd>` — see run_silver.py's main().
+  # Roots default to the real GCS layers; override via --bronze-root/--output-root for fixtures.
+  processing:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/processing/Dockerfile
+    image: flight-search-processing:dev
+    profiles: ["tools"]
+    environment:
+      FLIGHT_SEARCH_GCS_BUCKET: ${FLIGHT_SEARCH_GCS_BUCKET}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/gcloud/application_default_credentials.json
+      SILVER_GCS_PREFIX: ${SILVER_GCS_PREFIX:-silver}
+    volumes:
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro
+
 volumes:
   postgres-db-volume:

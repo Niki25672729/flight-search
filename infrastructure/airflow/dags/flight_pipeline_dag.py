@@ -14,6 +14,7 @@ from config import SCRAPE_ORIGINS
 # ---------------------------
 
 INGESTION_IMAGE = "flight-search-ingestion:dev"
+PROCESSING_IMAGE = "flight-search-processing:dev"
 GCS_CREDENTIALS_TARGET = "/app/gcloud/application_default_credentials.json"
 TASK_EXECUTION_TIMEOUT = timedelta(minutes=30)
 CHECK_GCS_EXECUTION_TIMEOUT = timedelta(minutes=2)
@@ -113,7 +114,29 @@ with DAG(
         mounts=COMMON_MOUNTS,
     )
 
-    check_gcs_accessible >> ingest_flights >> retry_failed_ingests >> generate_run_report
+    # Bronze -> silver. Runs strictly after retry_failed_ingests so the day's bronze is as complete as it will get; run_silver's own
+    # assert_bronze_complete still fails this task loudly if any origin is missing. Bronze/output
+    # roots default to the real GCS layers inside the image (FLIGHT_SEARCH_GCS_BUCKET +
+    # SILVER_GCS_PREFIX), so the command only carries the run date.
+    process_bronze_to_silver = DockerOperator(
+        task_id="process_bronze_to_silver",
+        image=PROCESSING_IMAGE,
+        docker_url="unix://var/run/docker.sock",
+        network_mode="bridge",
+        mount_tmp_dir=False,
+        auto_remove="force",
+        execution_timeout=TASK_EXECUTION_TIMEOUT,
+        # Deliberately all_success (unlike its all_done siblings): a failed ingest chain must not
+        # build silver from incomplete bronze — assert_bronze_complete is the second line of
+        # defense, not the first.
+        trigger_rule="all_success",
+        command=["--run-date", "{{ data_interval_end | ds_nodash }}"],
+        environment={**COMMON_ENVIRONMENT, "SILVER_GCS_PREFIX": os.environ.get("SILVER_GCS_PREFIX", "silver")},
+        mounts=COMMON_MOUNTS,
+    )
 
-    # processing (bronze -> silver) and transform (silver -> gold) tasks join here
-    # once pipeline/processing/ and pipeline/transform/ exist (see ARCHITECTURE_DASHBOARD.md).
+    check_gcs_accessible >> ingest_flights >> retry_failed_ingests >> [generate_run_report, process_bronze_to_silver]
+
+    # transform (silver -> gold) joins after process_bronze_to_silver once its DAG wiring lands —
+    # it must depend on this task, not just share the schedule (see ARCHITECTURE_DASHBOARD.md's
+    # open question on non-atomic partition overwrites).

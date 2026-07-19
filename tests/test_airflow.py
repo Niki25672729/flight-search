@@ -99,11 +99,27 @@ def test_default_args_retry_policy(dag):
 
 def test_task_dependency_chain(dag):
     """Tests the full task chain: check_gcs_accessible -> ingest_flights -> retry_failed_ingests
-    -> generate_run_report -- the ordering MONITORING.md and ARCHITECTURE_DASHBOARD.md describe."""
+    -> {generate_run_report, process_bronze_to_silver} -- reporting and processing both wait for
+    the retry pass (the day's bronze is as complete as it will get), then run independently."""
     assert dag.task_dict["check_gcs_accessible"].downstream_task_ids == {"ingest_flights"}
     assert dag.task_dict["ingest_flights"].downstream_task_ids == {"retry_failed_ingests"}
-    assert dag.task_dict["retry_failed_ingests"].downstream_task_ids == {"generate_run_report"}
+    assert dag.task_dict["retry_failed_ingests"].downstream_task_ids == {
+        "generate_run_report",
+        "process_bronze_to_silver",
+    }
     assert dag.task_dict["generate_run_report"].downstream_task_ids == set()
+    assert dag.task_dict["process_bronze_to_silver"].downstream_task_ids == set()
+
+
+def test_process_bronze_to_silver_command_and_gating(dag):
+    """Tests the silver task carries only the run date (roots default to the real GCS layers
+    inside the image) and uses all_success — a failed ingest chain must NOT silently produce a
+    silver partition from incomplete bronze (assert_bronze_complete is the second line of
+    defense, not the first)."""
+    task = dag.task_dict["process_bronze_to_silver"]
+    assert task.command == ["--run-date", "{{ data_interval_end | ds_nodash }}"]
+    assert task.trigger_rule == "all_success"
+    assert task.environment["SILVER_GCS_PREFIX"] == "silver"
 
 
 def test_on_failure_callback_is_wired(dag):
