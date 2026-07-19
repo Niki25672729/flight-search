@@ -5,8 +5,7 @@ import os
 from pyspark.sql import SparkSession
 
 from config import CLOUD_CACHE_ROOT, GCS_BUCKET_NAME, SCRAPE_ORIGINS
-from fs import path_exists
-from silver import latest_state_path, price_history_path, process_day
+from silver import process_day, run_date_already_processed
 
 
 # ---------------------------
@@ -83,11 +82,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--airline", default="ryanair")
     parser.add_argument(
-        "--refuse-if-exists",
-        action="store_true",
-        help="Abort before writing if any output path already has data — for one-off/manual runs "
-        "where overwriting must never happen. Off by default: the job's normal partition-overwrite "
-        "retry-safety design needs overwrite to work for scheduled runs.",
+        "--allow-overwrite",
+        default="false",
+        help="'true' to reprocess a run_date whose silver partition already exists; anything "
+        "else skips it without raising. Sourced from the allow_overwrite Airflow Variable.",
     )
     return parser.parse_args(argv)
 
@@ -108,14 +106,10 @@ def main(argv: list[str] | None = None) -> None:
     needs_gcs = args.bronze_root.startswith("gs://") or args.output_root.startswith("gs://")
     spark = build_spark_session(needs_gcs=needs_gcs)
     try:
-        if args.refuse_if_exists:
-            existing = [
-                p
-                for p in (latest_state_path(args.output_root), price_history_path(args.output_root))
-                if path_exists(spark, p)
-            ]
-            if existing:
-                raise RuntimeError(f"--refuse-if-exists: output already present, aborting without writing: {existing}")
+        allow_overwrite = args.allow_overwrite.strip().lower() == "true"
+        if not allow_overwrite and run_date_already_processed(spark, args.output_root, args.run_date):
+            logging.warning("Skipping run_date=%s: already processed and allow_overwrite is not set.", args.run_date)
+            return
         summary = process_day(spark, args.bronze_root, args.output_root, args.airline, origins, args.run_date)
         logging.info(f"Silver run complete for {args.run_date}: {summary}")
     finally:

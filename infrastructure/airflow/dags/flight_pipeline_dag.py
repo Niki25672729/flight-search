@@ -27,6 +27,8 @@ COMMON_ENVIRONMENT = {
 COMMON_MOUNTS = [
     Mount(source=os.environ["HOST_GCLOUD_ADC_PATH"], target=GCS_CREDENTIALS_TARGET, type="bind", read_only=True)
 ]
+# See ARCHITECTURE_DASHBOARD.md's Refresh & Backfill
+ALLOW_OVERWRITE_TEMPLATE = "{{ var.value.get('allow_overwrite', 'false') }}"
 
 
 # ---------------------------
@@ -130,7 +132,7 @@ with DAG(
         # build silver from incomplete bronze — assert_bronze_complete is the second line of
         # defense, not the first.
         trigger_rule="all_success",
-        command=["--run-date", "{{ data_interval_end | ds_nodash }}"],
+        command=["--run-date", "{{ data_interval_end | ds_nodash }}", "--allow-overwrite", ALLOW_OVERWRITE_TEMPLATE],
         environment={**COMMON_ENVIRONMENT, "SILVER_GCS_PREFIX": os.environ.get("SILVER_GCS_PREFIX", "silver")},
         mounts=COMMON_MOUNTS,
     )
@@ -138,5 +140,5 @@ with DAG(
     check_gcs_accessible >> ingest_flights >> retry_failed_ingests >> [generate_run_report, process_bronze_to_silver]
 
     # transform (silver -> gold) joins after process_bronze_to_silver once its DAG wiring lands —
-    # it must depend on this task, not just share the schedule (see ARCHITECTURE_DASHBOARD.md's
-    # open question on non-atomic partition overwrites).
+    # it must depend on this task, not just share the schedule, and must set depends_on_past=True
+    # on the transform task itself (see ARCHITECTURE_DASHBOARD.md's Open Questions).

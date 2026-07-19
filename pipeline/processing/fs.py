@@ -19,28 +19,6 @@ def path_exists(spark: SparkSession, path: str) -> bool:
     return fs.exists(jvm_path)
 
 
-def list_partition_values(spark: SparkSession, path: str, partition_key: str) -> list[str]:
-    """
-    Lists Hive-style partition values (e.g. "2026-07-07") directly under `path` for a
-    `{partition_key}=value` layout, via Hadoop FileSystem so this works for gs:// too. Returns []
-    if `path` doesn't exist yet (no partitions written yet).
-    """
-    assert spark._jsc is not None and spark._jvm is not None
-    hadoop_conf = spark._jsc.hadoopConfiguration()
-    jvm_path = spark._jvm.org.apache.hadoop.fs.Path(path)
-    fs = jvm_path.getFileSystem(hadoop_conf)
-    if not fs.exists(jvm_path):
-        return []
-    prefix = f"{partition_key}="
-    values = []
-    for status in fs.listStatus(jvm_path):
-        if status.isDirectory():
-            name = status.getPath().getName()
-            if name.startswith(prefix):
-                values.append(name[len(prefix) :])
-    return values
-
-
 def peek_first_non_space_char(spark: SparkSession, path: str) -> str | None:
     """First non-whitespace char (None if empty) — tells local JSON-array bronze ("[") from GCS NDJSON ("{")."""
     assert spark._jsc is not None and spark._jvm is not None  # always set on a live SparkSession

@@ -89,14 +89,14 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 | Key files      | `pipeline/ingestion/run.py` (scheduled entry point — one origin or `retry` per invocation, see Airflow DAG), `pipeline/ingestion/manual_run.py` (manual/hotfix CLI entry point) |
 | External calls | `scraper` (v1's `src/scraper.py`, imported directly), Google Cloud Storage |
 
-### `pipeline/processing/` (TBD)
+### `pipeline/processing/`
 
 | Field          | Value                                                                     |
 | -------------- | ------------------------------------------------------------------------- |
-| Responsibility | PySpark job: read bronze flights, clean/dedupe/type, write silver         |
+| Responsibility | PySpark job: read bronze flights, clean/dedupe/type, write silver — see Silver Schema and Refresh & Backfill below for the diff/backfill design |
 | Inputs         | Bronze GCS path (flights)                                                 |
 | Outputs        | Silver (Parquet) written to GCS, exposed to BigQuery as an external table |
-| Key files      | TBD                                                                       |
+| Key files      | `pipeline/processing/run_silver.py` (scheduled entry point), `silver.py` (diff/write logic), `bronze_reader.py`, `quality.py`, `fs.py` |
 | External calls | Google Cloud Storage                                                      |
 
 ### `pipeline/transform/` (TBD)
@@ -155,11 +155,53 @@ flight_key = hash(origin, destination, departure_date, airline)
 
 Retry safety rests on two mechanisms (both hardened during a data-engineer design review before implementation):
 
-**"Prior" is resolved as the most recent partition *strictly before* `run_date`** (`read_prior_latest_state`), never as "whatever's currently there." That single rule makes any retry, manual rerun, or backfill safe in every interleaving: a rerun always excludes `run_date`'s own partition, so a day can never be diffed against itself and the diff can never silently collapse to zero changes. (The today-vs-today hazard was real only in the original whole-table-overwrite design, where "prior" could only mean the table's current contents — the partitioned layout plus this read rule is what closed it.)
+**"Prior" is resolved from `run_date - 1`'s bronze, re-cleaned the same way as today's snapshot** (`read_prior_state_from_bronze`), not by reading a previously-computed silver partition. Every `run_date`'s diff depends only on bronze, which ingestion already writes independently per day, so both a single-date rerun and a multi-date backfill (in any order, or in parallel) are safe — see Refresh & Backfill below. Per-origin, not all-or-nothing: an origin missing at `run_date - 1` is checked across the 5 days before that (`_BOOTSTRAP_LOOKBACK_DAYS`) — no history anywhere in that window means a not-yet-onboarded origin (dropped from "prior", so its flights land as new, not a failure), but any history there means a real gap, and fails loud instead of guessing which one it is.
 
 The job still writes the `flight_price_history` diff *before* today's `flights_latest_state` partition, but that ordering is a reader-consistency nicety, not a safety mechanism: correctness doesn't depend on it (the strictly-before read above does that work), it just guarantees a concurrent reader — e.g. a `dbt run` racing the Spark job — can never observe a new snapshot partition whose matching price-history partition doesn't exist yet.
 
 **Every write must be partition-overwrite, not blind append or whole-table overwrite.** "Appended daily" for `flight_price_history` means a Spark `.mode("append")` would duplicate that day's rows if the task retries after a partial failure. Both outputs — including `flights_latest_state`, partitioned by `scrape_date` rather than a single mutable table — instead overwrite only the `scrape_date` partition being (re)computed (`partitionBy("scrape_date")` with `spark.sql.sources.partitionOverwriteMode=dynamic` and `.mode("overwrite")`), so re-running the same `run_date` replaces that day's rows instead of accumulating duplicates, and never touches a different day's partition.
+
+### Refresh & Backfill
+
+**Usage**
+
+```bash
+# 1. Turn the switch on
+airflow variables set allow_overwrite true
+
+# 2a. (optional) Preview which task instances would be cleared -- without --yes, Airflow lists
+#     them and asks for confirmation instead of acting immediately
+airflow tasks clear flight_pipeline \
+    --task-regex "^process_bronze_to_silver$" \
+    --start-date 2026-07-07 \
+    --end-date 2026-07-19
+
+# 2b. Once the list looks right, re-run with --yes to skip the confirmation prompt and clear
+#     immediately -- Airflow re-triggers every cleared instance automatically
+airflow tasks clear flight_pipeline \
+    --task-regex "^process_bronze_to_silver$" \
+    --start-date 2026-07-07 \
+    --end-date 2026-07-19 \
+    --yes
+
+# 3. Once every cleared date has finished, turn the switch back off — otherwise a later
+#    accidental Clear on any date would silently reprocess it too
+airflow variables set allow_overwrite false
+```
+
+**Why**: a logic change (a cleaning fix, a new dedup rule, a dbt model change) needs historical dates recomputed, not just new data going forward, and re-triggering a wide date range one task at a time isn't realistic. `allow_overwrite` plus Airflow's own bulk Clear (date range + task selector, auto-retriggers every match) turns that into one two-flag operation regardless of range size.
+
+**Mechanism**: `allow_overwrite` is an Airflow Variable, default `"false"`, read at task-render time via a shared template string — not a top-level `Variable.get`, which would hit the metadata DB on every DAG parse and risk breaking the whole DAG's import on a hiccup — so every consuming task shares one definition. Each pipeline stage below decides for itself, from that one flag, whether reprocessing an already-produced date is allowed.
+
+#### Silver (bronze → silver)
+
+`process_bronze_to_silver` carries `allow_overwrite` as `--allow-overwrite`. `run_silver.py`'s `main()` checks it — before calling `process_day` at all — via `run_date_already_processed`: true iff `run_date`'s `flights_latest_state` partition already exists. That check targets `flights_latest_state` specifically, not `flight_price_history`: `flights_latest_state` is always written last, so its presence means a genuinely *complete* prior run — a retry after a partial failure must proceed unconditionally, regardless of `allow_overwrite`. If blocked, `main()` skips with a warning log instead of raising — raising would look like a real failure to Airflow, burning through retries and firing the DagRun-failure alert for nothing actually broken. The check lives in the processing container (which already has GCS access), not the DAG (which deliberately doesn't — decision #008), so this costs no extra task.
+
+Because `read_prior_state_from_bronze` (above) makes every `run_date`'s output depend only on bronze — never another `run_date`'s silver output — a backfill is safe in any order or in parallel; there's no "process oldest first" requirement.
+
+One gotcha worth knowing: a date that was silver's *first-ever* run read "no prior," so its `flight_price_history` has every row as `is_new_flight=true`. If that date falls inside a backfilled range, include it in the Clear too — recomputing it against the newly-backfilled day before it fixes the diff.
+
+Gold's own refresh gets its own subsection here once `transform` is wired into the DAG and its scoping (once vs. per-date, and whether it needs a separate guard) is decided — see Open Questions.
 
 ### Worked example (AGP→EMA, real data)
 
@@ -232,26 +274,29 @@ Failures are retried at two different layers — Airflow task retries and an in-
 | 019 | CI (`.github/workflows/ingestion-image.yml`) builds and pushes the ingestion image to GHCR on every relevant push to `main`, but local Docker Compose/Airflow keep building `:dev` locally rather than pulling from GHCR | Switch local Docker Compose/DAG to pull the GHCR image instead of building locally  | Pulling from GHCR would slow local iteration (commit → push → wait for CI → pull, vs. an immediate local rebuild) for no benefit while the pipeline is still under active development. Revisit once v2 (processing/transform/dashboard) is finished and local iteration speed matters less than running a CI-verified image |
 | 020 | DagRun-failure alerting logs a single line rather than emailing/paging; a separate always-succeeding task (not `retry_failed_ingests`) handles per-origin/aggregate reporting | SMTP/Slack integration in Docker Compose; folding stats into `retry_failed_ingests` | No mail server exists in the stack yet; a log line is a cheap floor, and a separate task keeps per-origin visibility without blocking retries |
 | 021 | `flight_key = sha2(origin \| destination \| departure_date \| airline)` — the identity of one route-day's cheapest fare, enforced end-to-end (silver's derivation and uniqueness gate, ingestion's retry-merge dedupe) | The original physical-flight key (`+ departure_time + flight_number`, no airline); Python's `hash()` (per-process-randomized, breaks rerun idempotency) | The feed returns one cheapest fare per route-day, so a finer-grained key manufactures churn instead of identity: displacement read as a fake removal + fake new flight, and a retry observing a different cheapest broke the grain outright (2026-07-12). Under the route-day key, displacement is a price change on a stable key; `departure_time`/`flight_number` are attributes. Grain verification and details in the Silver Schema section above |
+| 022 | Silver's "prior" state is derived fresh from `run_date - 1`'s bronze (`read_prior_state_from_bronze`), not read from a previously-computed silver partition | Read the most recent `flights_latest_state` partition strictly before `run_date` (`read_prior_latest_state`, original design) | The silver-partition read made every `run_date` depend on the previous `run_date`'s silver output already existing — safe for daily runs, but made backfilling multiple historical dates order-dependent (parallel/out-of-order runs could diff against a stale or missing prior). Bronze already exists independently per day (ingestion writes it that way), so deriving "prior" from bronze instead removes the cross-day dependency entirely — a backfill is safe in any order or in parallel. Trade-off: re-cleans bronze for the prior day on every run instead of a cheap parquet read; acceptable at this project's data volume (see Constraints & Assumptions) |
+| 023 | An Airflow Variable, `allow_overwrite`, gates reprocessing in `run_silver.py`'s `main()`, before `process_day` is called — skips (doesn't raise) if `run_date`'s `flights_latest_state` partition already exists and `allow_overwrite` isn't `"true"` | A DAG-level `ShortCircuitOperator` gating on "is `run_date` in the past" (tried first, reverted); the check living inside `process_day` itself (tried second, reverted) | The DAG-level version could only gate on calendar proximity, since the Airflow image has no GCS access (decision #008). Checking real existence in the processing container (which has GCS access) is more precise — "was `run_date` already fully processed," not "is this date old." Moving the check out of `process_day` into `main()` keeps `process_day` a pure compute function with no policy branching; `main()` already owns CLI parsing and Spark-session setup, so it's the natural place for this decision too. Checking `flights_latest_state` specifically (not `flight_price_history`) avoids blocking Airflow's own automatic retry after a partial failure |
+| 024 | An origin missing bronze at `run_date - 1` is checked per-origin across the 5 days before that; no history anywhere in that window is treated as a not-yet-onboarded origin (dropped from "prior"), any history there fails loud | Fail loud on any missing origin at `run_date - 1` regardless (tried first, reverted); an explicit `--bootstrap` CLI flag for a human to assert "this really is day one" | Failing loud unconditionally broke a normal, expected event: adding a new origin to `SCRAPE_ORIGINS` would fail every subsequent day's silver run forever, since a new origin never has "yesterday" bronze by definition. A manual flag would fix that but needs a human to remember to flip it for every new origin. The lookback makes it self-resolving: a new origin has no history in the whole window (safe to skip), while a real gap almost always leaves some trace within it (fails loud) — bounded to 5 days specifically to avoid the full backward-scan machinery a truly unbounded "walk back until you find something" search would need |
 
 ## External Dependencies
 
 **Active:**
 
-| Name                      | Purpose                                            | Docs                                                                 |
-| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
-| terraform                 | IaC tool (provisions GCS bucket + service account) | https://developer.hashicorp.com/terraform                            |
-| terraform-provider-google | GCP provider plugin for Terraform                  | https://registry.terraform.io/providers/hashicorp/google/latest/docs |
-| google-cloud-storage      | Read/write bronze and silver data to GCS           | https://cloud.google.com/python/docs/reference/storage/latest        |
-
-**Planned, not yet active:**
-
 | Name                            | Purpose                                                        | Docs                                                                              |
 | ------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| terraform                       | IaC tool (provisions GCS bucket + service account)             | https://developer.hashicorp.com/terraform                                         |
+| terraform-provider-google       | GCP provider plugin for Terraform                              | https://registry.terraform.io/providers/hashicorp/google/latest/docs              |
+| google-cloud-storage            | Read/write bronze and silver data to GCS                       | https://cloud.google.com/python/docs/reference/storage/latest                     |
 | pyspark                         | Data cleaning/transformation, local Spark session (no cluster) | https://spark.apache.org/docs/latest/api/python/                                  |
-| dbt-core / dbt-bigquery         | Transform silver → gold, testing, docs                         | https://docs.getdbt.com                                                           |
 | apache-airflow                  | DAG definition and orchestration                               | https://airflow.apache.org/docs/                                                  |
 | docker (Docker Engine)          | Container runtime for per-task containers                      | https://docs.docker.com/engine/                                                   |
 | apache-airflow-providers-docker | `DockerOperator`, to launch containers from Airflow            | https://airflow.apache.org/docs/apache-airflow-providers-docker/stable/index.html |
+
+**Planned, not yet active:**
+
+| Name                    | Purpose                                | Docs                    |
+| ----------------------- | -------------------------------------- | ----------------------- |
+| dbt-core / dbt-bigquery | Transform silver → gold, testing, docs | https://docs.getdbt.com |
 
 ## Constraints & Assumptions
 
@@ -267,7 +312,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
 
 ## Open Questions
 
-- [ ] No refresh/backfill mechanism exists: regenerating silver history or backfilling bronze has no defined procedure for rebuilding gold (which tables, in what order, and how stateful ones are carried across) — needs an explicit runbook or automation
+- [ ] Transform (dbt) DAG wiring, once it lands, must set `depends_on_past=True` on the transform task specifically — not the whole DAG, and not a shared pool. Once silver backfill can run multiple dates in parallel, a naive per-DagRun `transform` task would let two `dbt run`s race on the same full-rebuild gold tables: BigQuery's `CREATE OR REPLACE TABLE AS SELECT` is atomic per query but not across concurrent queries, so whichever run *commits* last wins — regardless of which one read more complete silver data. Chaining only the transform task (silver stays fully parallel/unaffected) fixes this: each date's transform only starts once the previous date's transform succeeded, so the latest-dated link in the chain is guaranteed to run last and see everything backfilled underneath it. Doesn't protect against a `dbt run` triggered manually outside Airflow.
 - [ ] Dashboard analysis/design: what exact metrics, breakdowns, and visualizations does the dashboard need? Blocks the exact gold star schema (see `pipeline/transform/`)
 - [ ] Looker Studio vs. Tableau Public: is Looker Studio's visualization depth sufficient, or does the analysis need richer charting/interactivity that would justify the Tableau + Sheets-export trade-off instead?
 - [ ] Data quality checks: a CI smoke test catches crash-level bugs in the ingestion image, but content-level validation (price bounds, null checks, anomaly detection) is still untouched, pending the dbt/gold layer
@@ -308,3 +353,6 @@ Failures are retried at two different layers — Airflow task retries and an in-
 | 020 | CI builds/pushes the ingestion image to GHCR, but local Docker Compose/Airflow keep building `:dev` locally until v2 is finished | Accepted |
 | 021 | DagRun-failure alerting logs one line; a separate task handles per-origin/aggregate reporting     | Accepted |
 | 022 | `flight_key` = route-day grain (origin, destination, departure date, airline) — one key per route-day's cheapest fare, shared by silver and the ingestion retry-merge; physical-flight key replaced | Accepted |
+| 023 | Silver's "prior" state derived from `run_date - 1`'s bronze, not a previously-computed silver partition — removes the cross-day backfill ordering dependency | Accepted |
+| 024 | `allow_overwrite` Airflow Variable, checked in `run_silver.py`'s `main()` against `flights_latest_state`'s existence before calling `process_day`, guards `process_bronze_to_silver` against accidental historical reprocessing | Accepted |
+| 025 | An origin missing bronze at `run_date - 1` is checked per-origin across a 5-day lookback window — no history there means a new origin (skipped), any history there fails loud as a real gap | Accepted |

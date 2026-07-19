@@ -19,7 +19,8 @@ from silver import (
     latest_state_path,
     price_history_path,
     process_day,
-    read_prior_latest_state,
+    read_prior_state_from_bronze,
+    run_date_already_processed,
     write_partitioned,
 )
 
@@ -330,15 +331,86 @@ def test_diff_rows_are_exactly_the_new_and_changed_route_days(spark, seeded_bron
 
 
 def test_bootstrap_day_is_all_new(spark, seeded_bronze_root, output_root):
-    """With no prior partition, every route-day is is_new_flight=True with a null prior — the
-    first-ever run (and the far edge of the window every day after) must read as 'new', never
-    as a fabricated price change."""
+    """With no prior day's bronze at all, every route-day is is_new_flight=True with a null
+    prior — the first-ever run (and the far edge of the window every day after) must read as
+    'new', never as a fabricated price change."""
     process_day(spark, seeded_bronze_root, output_root, AIRLINE, ORIGINS, "20260707")
 
     rows = spark.read.parquet(price_history_path(output_root)).collect()
     assert len(rows) == 4
     assert all(row.is_new_flight for row in rows)
     assert all(row.prior_price_eur is None for row in rows)
+
+
+def test_prior_day_gap_fails_loud_when_origin_has_recent_history(spark, bronze_root, output_root):
+    """An origin missing at run_date-1 but present somewhere in the lookback window is a real
+    gap, not a new origin -- fails loud rather than silently dropping its prior state."""
+    _write_bronze_day(bronze_root, "20260703", [_bronze_row()], origin="BCN")  # BCN's last day before the gap
+    _write_bronze_day(bronze_root, "20260707", [_bronze_row()], origin="AGP")  # BCN missing 07-04..07-07
+    _write_bronze_day(bronze_root, "20260708", [_bronze_row()], origin="AGP")
+    _write_bronze_day(bronze_root, "20260708", [_bronze_row(origin_iata="BCN")], origin="BCN")
+
+    with pytest.raises(DataQualityError, match="Bronze gap"):
+        process_day(spark, bronze_root, output_root, AIRLINE, ["AGP", "BCN"], "20260708")
+
+
+def test_new_origin_with_no_recent_history_is_treated_as_first_run_for_that_origin(spark, bronze_root, output_root):
+    """An origin missing at run_date-1 and throughout the lookback window is treated as
+    not-yet-onboarded: its flights land as is_new_flight=True instead of failing the run, while
+    other origins' prior state is used normally."""
+    _write_bronze_day(bronze_root, "20260707", [_bronze_row(price_eur=10.0)], origin="AGP")
+    _write_bronze_day(bronze_root, "20260708", [_bronze_row(price_eur=10.0)], origin="AGP")
+    _write_bronze_day(bronze_root, "20260708", [_bronze_row(origin_iata="BCN")], origin="BCN")
+    # BCN has no bronze before 07-08 at all -- brand new origin, first day of scraping.
+
+    process_day(spark, bronze_root, output_root, AIRLINE, ["AGP", "BCN"], "20260708")
+
+    rows = spark.read.parquet(price_history_path(output_root)).collect()
+    assert len(rows) == 1
+    assert rows[0].origin_iata == "BCN"
+    assert rows[0].is_new_flight is True
+
+
+# ---------------------------
+# Backfill / Refresh
+# ---------------------------
+
+
+def test_backfill_is_order_independent(spark, bronze_root, output_root):
+    """Each run_date's diff depends only on bronze, not another run_date's silver output —
+    processing three days out of order must produce the same diffs as processing in order."""
+    _write_bronze_day(bronze_root, "20260707", [_bronze_row(price_eur=10.0)])
+    _write_bronze_day(bronze_root, "20260708", [_bronze_row(price_eur=20.0)])
+    _write_bronze_day(bronze_root, "20260709", [_bronze_row(price_eur=30.0)])
+
+    for run_date in ("20260709", "20260707", "20260708"):  # deliberately out of order
+        process_day(spark, bronze_root, output_root, AIRLINE, ["AGP"], run_date)
+
+    history = spark.read.parquet(price_history_path(output_root))
+    day2 = history.filter("scrape_date = to_date('2026-07-08')").collect()[0]
+    day3 = history.filter("scrape_date = to_date('2026-07-09')").collect()[0]
+    assert (day2.price_eur, day2.prior_price_eur) == (20.0, 10.0)
+    assert (day3.price_eur, day3.prior_price_eur) == (30.0, 20.0)
+
+
+def test_run_date_already_processed_true_after_a_complete_run(spark, seeded_bronze_root, output_root):
+    """Reflects flights_latest_state's partition specifically."""
+    assert run_date_already_processed(spark, output_root, "20260707") is False
+
+    process_day(spark, seeded_bronze_root, output_root, AIRLINE, ORIGINS, "20260707")
+
+    assert run_date_already_processed(spark, output_root, "20260707") is True
+
+
+def test_run_date_already_processed_false_after_partial_failure(spark, seeded_bronze_root, output_root):
+    """False when only flight_price_history was written -- latest_state is written last."""
+    run_date = "20260707"
+    today = load_bronze_snapshot(spark, seeded_bronze_root, AIRLINE, ORIGINS, run_date).cache()
+    prior = read_prior_state_from_bronze(spark, seeded_bronze_root, AIRLINE, ORIGINS, run_date).cache()
+    configure_partition_overwrite(spark)
+    write_partitioned(compute_price_history(today, prior, run_date), price_history_path(output_root))
+
+    assert run_date_already_processed(spark, output_root, run_date) is False
 
 
 # ---------------------------
@@ -363,7 +435,8 @@ def test_retry_after_partial_failure_reproduces_identical_diffs(spark, seeded_br
     Simulates the retry an Airflow task-level retry can actually produce: the job dies after the
     price-history diff is written but before flights_latest_state is. A retry (a fresh, full
     process_day call) must recompute byte-for-byte identical diff rows, because "prior" resolves
-    strictly before run_date (read_prior_latest_state) — never to the day's own partial state.
+    from run_date - 1's bronze (read_prior_state_from_bronze) — never to the day's own partial
+    silver state (which this simulated crash never even writes).
     """
     run_date = "20260708"
     process_day(spark, seeded_bronze_root, output_root, AIRLINE, ORIGINS, "20260707")  # bootstrap baseline
@@ -371,7 +444,7 @@ def test_retry_after_partial_failure_reproduces_identical_diffs(spark, seeded_br
 
     # --- "Crashed" run: diff written, write_latest_state deliberately skipped ---
     today = load_bronze_snapshot(spark, seeded_bronze_root, AIRLINE, ORIGINS, run_date).cache()
-    prior = read_prior_latest_state(spark, output_root, run_date).cache()
+    prior = read_prior_state_from_bronze(spark, seeded_bronze_root, AIRLINE, ORIGINS, run_date).cache()
     write_partitioned(compute_price_history(today, prior, run_date), price_history_path(output_root))
 
     assert spark.read.parquet(latest_state_path(output_root)).count() == 4  # still day-1's baseline, untouched

@@ -112,12 +112,17 @@ def test_task_dependency_chain(dag):
 
 
 def test_process_bronze_to_silver_command_and_gating(dag):
-    """Tests the silver task carries only the run date (roots default to the real GCS layers
-    inside the image) and uses all_success — a failed ingest chain must NOT silently produce a
-    silver partition from incomplete bronze (assert_bronze_complete is the second line of
-    defense, not the first)."""
+    """Tests the silver task carries the run date and the allow_overwrite Variable (roots default
+    to the real GCS layers inside the image), and uses all_success — a failed ingest chain must
+    NOT silently produce a silver partition from incomplete bronze (assert_bronze_complete is the
+    second line of defense, not the first)."""
     task = dag.task_dict["process_bronze_to_silver"]
-    assert task.command == ["--run-date", "{{ data_interval_end | ds_nodash }}"]
+    assert task.command == [
+        "--run-date",
+        "{{ data_interval_end | ds_nodash }}",
+        "--allow-overwrite",
+        "{{ var.value.get('allow_overwrite', 'false') }}",
+    ]
     assert task.trigger_rule == "all_success"
     assert task.environment["SILVER_GCS_PREFIX"] == "silver"
 
