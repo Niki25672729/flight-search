@@ -9,19 +9,28 @@ DATE_FORMAT = "%Y%m%d"
 FLIGHT_CACHE_FILENAME = "{origin}_{yyyymmdd}.json"
 FLIGHT_STATUS_FILENAME = "status.json"
 
+FLIGHT_CACHE_DIR = "flights/{airline}/{yyyymm}/{dd}"
+RETRY_QUEUE_PATH = "flights/{airline}/retry/retry_{origin}_{yyyymmdd}.json"
+
 # Local
 LOCAL_CACHE_ROOT = "cache"
-LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, "flights", "{airline}", "{yyyymm}", "{dd}")
-LOCAL_RETRY_QUEUE_PATH = os.path.join(
-    LOCAL_CACHE_ROOT, "flights", "{airline}", "retry", "retry_{origin}_{yyyymmdd}.json"
-)
+LOCAL_FLIGHT_CACHE_DIR = os.path.join(LOCAL_CACHE_ROOT, FLIGHT_CACHE_DIR)
+LOCAL_RETRY_QUEUE_PATH = os.path.join(LOCAL_CACHE_ROOT, RETRY_QUEUE_PATH)
 
 # Cloud
 GCS_BUCKET_NAME = os.environ.get("FLIGHT_SEARCH_GCS_BUCKET", "")
 CLOUD_CACHE_ROOT = "bronze"
-CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/{{yyyymm}}/{{dd}}"
-CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/flights/{{airline}}/retry/retry_{{origin}}_{{yyyymmdd}}.json"
+CLOUD_FLIGHT_CACHE_DIR = f"{CLOUD_CACHE_ROOT}/{FLIGHT_CACHE_DIR}"
+CLOUD_RETRY_QUEUE_PATH = f"{CLOUD_CACHE_ROOT}/{RETRY_QUEUE_PATH}"
 CLOUD_REPORT_PATH = f"{CLOUD_FLIGHT_CACHE_DIR}/{FLIGHT_STATUS_FILENAME}"
+
+
+# ---------------------------
+# Silver (v2 Pipeline)
+# ---------------------------
+
+SILVER_LATEST_STATE_TABLE = "flights_latest_state"
+SILVER_PRICE_HISTORY_TABLE = "flight_price_history"
 
 
 # ---------------------------

@@ -52,7 +52,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ### `infrastructure/terraform/`
 
 | Field          | Value                                                            |
-|----------------|------------------------------------------------------------------|
+| -------------- | ---------------------------------------------------------------- |
 | Responsibility | Provision shared GCP resources: the bronze/silver GCS bucket (90-day lifecycle rule on `bronze/`) and a service account with `storage.objectAdmin`, granted via impersonation rather than a downloaded key |
 | Inputs         | Terraform variables (`terraform.tfvars`, gitignored)             |
 | Outputs        | GCS bucket + service account that the CLI (`src/cache.py`) and pipeline (`pipeline/ingestion/run.py`) authenticate against |
@@ -62,7 +62,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ### `infrastructure/docker/`
 
 | Field          | Value                                                                              |
-|----------------|------------------------------------------------------------------------------------|
+| -------------- | ---------------------------------------------------------------------------------- |
 | Responsibility | Dockerfiles for each per-task container: Airflow, ingestion, processing, transform |
 | Inputs         | N/A (build-time definitions)                                                       |
 | Outputs        | Container images that Airflow launches via `DockerOperator`                        |
@@ -71,28 +71,28 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 
 ### `infrastructure/airflow/`
 
-| Field          | Value                                                                     |
-|----------------|---------------------------------------------------------------------------|
+| Field          | Value                                                                                       |
+| -------------- | ------------------------------------------------------------------------------------------- |
 | Responsibility | Define the DAG (ingest → retry → report today; processing/transform join once built), run it on a schedule, and alert on DagRun failure |
-| Inputs         | None (time-triggered)                                                     |
+| Inputs         | None (time-triggered)                                                                       |
 | Outputs        | Pipeline run logs, task success/failure status, retries, a per-origin/aggregate ingestion summary, and an ERROR-level alert log line on DagRun failure (see Monitoring & Alerting) |
 | Key files      | `infrastructure/airflow/dags/flight_pipeline_dag.py`, `callbacks.py` (DagRun-failure alert) |
-| External calls | Docker Engine (via `DockerOperator`)                                      |
+| External calls | Docker Engine (via `DockerOperator`)                                                        |
 
 ### `pipeline/ingestion/`
 
-| Field          | Value                                                                                            |
-|----------------|--------------------------------------------------------------------------------------------------|
+| Field          | Value                                                                      |
+| -------------- | -------------------------------------------------------------------------- |
 | Responsibility | `ingest_airport` calls v1's scraper (`src/scraper.py`) per configured airport and writes bronze to GCS<br>`retry_failed_ingests` re-attempts previously failed {origin, date} pairs from the retry queue and merges recovered flights |
-| Inputs         | `SCRAPE_ORIGINS` (hardcoded in `src/config.py` — see decision #008)                              |
+| Inputs         | `SCRAPE_ORIGINS` (hardcoded in `src/config.py` — see decision #008)        |
 | Outputs        | Raw availability data written to GCS as NDJSON. Flights are partitioned daily as `bronze/flights/{airline}/{yyyymm}/{dd}/{origin}_{yyyymmdd}.json`. |
 | Key files      | `pipeline/ingestion/run.py` (scheduled entry point — one origin or `retry` per invocation, see Airflow DAG), `pipeline/ingestion/manual_run.py` (manual/hotfix CLI entry point) |
-| External calls | `scraper` (v1's `src/scraper.py`, imported directly), Google Cloud Storage                       |
+| External calls | `scraper` (v1's `src/scraper.py`, imported directly), Google Cloud Storage |
 
 ### `pipeline/processing/` (TBD)
 
 | Field          | Value                                                                     |
-|----------------|---------------------------------------------------------------------------|
+| -------------- | ------------------------------------------------------------------------- |
 | Responsibility | PySpark job: read bronze flights, clean/dedupe/type, write silver         |
 | Inputs         | Bronze GCS path (flights)                                                 |
 | Outputs        | Silver (Parquet) written to GCS, exposed to BigQuery as an external table |
@@ -102,7 +102,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ### `pipeline/transform/` (TBD)
 
 | Field          | Value                                                              |
-|----------------|--------------------------------------------------------------------|
+| -------------- | ------------------------------------------------------------------ |
 | Responsibility | Model silver → gold star schema (exact fact/dimension tables TBD, pending dashboard requirements); tests and docs |
 | Inputs         | Silver flights, exposed as a BigQuery external table over GCS      |
 | Outputs        | Gold tables in BigQuery (native), dbt docs site, test results      |
@@ -112,7 +112,7 @@ v1 stays fully functional standalone — if GCS is unreachable, the CLI falls ba
 ### `dashboards/looker/` (TBD)
 
 | Field          | Value                                                                                       |
-|----------------|---------------------------------------------------------------------------------------------|
+| -------------- | ------------------------------------------------------------------------------------------- |
 | Responsibility | Visualize gold tables — price trends by destination, cheapest destinations, price over time |
 | Inputs         | Gold tables in BigQuery (native connector, live or scheduled refresh)                       |
 | Outputs        | Looker Studio report, shareable link (public or restricted)                                 |
@@ -136,6 +136,59 @@ v1 and v2 read/write the same GCS bronze paths, but each with different intent:
 
 This lets an on-demand CLI search and the scheduled pipeline share scrape cost instead of duplicating it, while keeping each system's failure mode independent: the CLI never needs GCS to function, and the pipeline never depends on the CLI having been run.
 
+## Silver Schema
+
+`pipeline/processing/` turns each day's bronze into two small, purpose-built outputs rather than one big cleaned copy of bronze. Both share:
+
+```
+flight_key = hash(origin, destination, departure_date, airline)
+```
+
+— the identity of *one route-day's cheapest fare*, matching the only grain the source can see: `get_cheapest_flights` returns exactly one fare per (route, departure day) — verified against live data (131,154 snapshot rows = 131,154 distinct route-days, zero collisions). `departure_time` and `flight_number` are **attributes** of whichever physical flight is currently cheapest; they may change under a stable key, exactly like price. This keeps price history continuous when a cheaper flight on the same route-day displaces the current one — a price change, not a key break.
+
+| Output                 | Grain                                                                | Written                                                                            | Why |
+| ---------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --- |
+| `flights_latest_state` | 1 row / `flight_key` × `scrape_date`                                 | Partitioned by `scrape_date`, new partition daily (never overwrites a prior day's) | A day's cleaned bronze already *is* the complete current state (the scraper re-queries the full ~97-day window every run); "current" = the newest `scrape_date` partition, a cheap partition-pruned read. Partitioning keeps every write create-only — see "Idempotency & Write Ordering". |
+| `flight_price_history` | 1 row / `flight_key` × `scrape_date`, only when new or price-changed | Appended daily                                                                     | The day-over-day diff (`prior_price_eur`, `is_new_flight`), computed once in Spark instead of repeatedly in billed BigQuery scans — its value is scan economy and price-event semantics, not compression (40–81% of fares reprice daily). Carries `airline` ahead of multi-airline scraping. |
+
+### Idempotency & Write Ordering
+
+Retry safety rests on two mechanisms (both hardened during a data-engineer design review before implementation):
+
+**"Prior" is resolved as the most recent partition *strictly before* `run_date`** (`read_prior_latest_state`), never as "whatever's currently there." That single rule makes any retry, manual rerun, or backfill safe in every interleaving: a rerun always excludes `run_date`'s own partition, so a day can never be diffed against itself and the diff can never silently collapse to zero changes. (The today-vs-today hazard was real only in the original whole-table-overwrite design, where "prior" could only mean the table's current contents — the partitioned layout plus this read rule is what closed it.)
+
+The job still writes the `flight_price_history` diff *before* today's `flights_latest_state` partition, but that ordering is a reader-consistency nicety, not a safety mechanism: correctness doesn't depend on it (the strictly-before read above does that work), it just guarantees a concurrent reader — e.g. a `dbt run` racing the Spark job — can never observe a new snapshot partition whose matching price-history partition doesn't exist yet.
+
+**Every write must be partition-overwrite, not blind append or whole-table overwrite.** "Appended daily" for `flight_price_history` means a Spark `.mode("append")` would duplicate that day's rows if the task retries after a partial failure. Both outputs — including `flights_latest_state`, partitioned by `scrape_date` rather than a single mutable table — instead overwrite only the `scrape_date` partition being (re)computed (`partitionBy("scrape_date")` with `spark.sql.sources.partitionOverwriteMode=dynamic` and `.mode("overwrite")`), so re-running the same `run_date` replaces that day's rows instead of accumulating duplicates, and never touches a different day's partition.
+
+### Worked example (AGP→EMA, real data)
+
+*(Illustration from real data, verified manually at design time. CI asserts these behaviors as invariants over synthetic bronze — see tests/test_processing.py's Diff Invariants — rather than pinning these exact euro amounts to a committed data blob.)*
+
+Bronze (raw scraped rows, 3 of 97 daily records for this route shown):
+
+| scrape date | flight_number | departure_time | price_eur |
+| ----------- | ------------- | -------------- | --------- |
+| 07-07       | FR4459        | 07-10 07:10    | 18.99     |
+| 07-07       | FR4459        | 07-11 05:45    | 27.99     |
+| 07-08       | FR4459        | 07-10 07:10    | 18.99     |
+| 07-08       | FR4459        | 07-11 05:45    | 27.80     |
+| 07-08       | FR4459        | 07-28 18:25    | 53.97     |
+| 07-09       | FR4459        | 07-10 07:10    | 18.99     |
+| 07-09       | FR4459        | 07-11 05:45    | 40.95     |
+| 07-09       | FR4459        | 07-28 18:25    | 53.55     |
+
+`flight_price_history` (changed-only):
+
+| scrape_date | flight_number | departure_time | price_eur | prior_price_eur | is_new_flight |
+| ----------- | ------------- | -------------- | --------- | --------------- | ------------- |
+| 07-08       | FR4459        | 07-11 05:45    | 27.80     | 27.99           | false         |
+| 07-08       | FR4459        | 07-28 18:25    | 53.97     | —               | **true**      |
+| 07-09       | FR4459        | 07-11 05:45    | 40.95     | 27.80           | false         |
+| 07-09       | FR4459        | 07-28 18:25    | 53.55     | 53.97           | false         |
+
+(`FR4459 @ 07-10 07:10` stays €18.99 all 3 days — correctly produces no rows, ever. Also verified against this data: `FR4459 @ 2026-08-04 18:25` (€68.05 on 07-07) is replaced on 07-08 by `FR4469 @ 10:50` (€68.99) — same route-day, so it lands as a €68.05 → €68.99 change with the `flight_number`/`departure_time` attributes moving, not a key break; encoded in `test_displacement_within_a_route_day_is_a_price_change`.)
+
 ## Retry Strategy
 
 Failures are retried at two different layers — Airflow task retries and an in-process, CAS-protected code-level retry queue — rather than either one alone.
@@ -156,36 +209,36 @@ Failures are retried at two different layers — Airflow task retries and an in-
 
 ## Key Design Decisions
 
-| #   | Decision                                                                                             | Alternatives considered                                                | Rationale                                                       |
-|-----|------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------|-----------------------------------------------------------------|
-| 001 | v2 lives in the same repo as v1, as an additive `pipeline/`, `dashboards/`, and `infrastructure/` layer, documented in a separate file | Single combined ARCHITECTURE.md; separate repository                   | Shares `src/` and repo-wide conventions (CLAUDE.md, CI, dependency management) with v1 instead of duplicating them across two repos, while separate doc files (`ARCHITECTURE.md` vs `ARCHITECTURE_DASHBOARD.md`) keep each system's design reasoning independently readable without cross-referencing every decision |
-| 002 | Terraform provisions the GCS bucket and service account (`infrastructure/terraform/`)                | Manual setup via `gcloud`/console                                      | Reproducible, versioned, self-documenting infra; matches the free-tier setup exactly and can be torn down/recreated without manual steps |
-| 003 | Developer impersonates the service account (`roles/iam.serviceAccountTokenCreator`) rather than a downloaded key | Downloaded service account key (`.json`)                             | Org policy blocks key creation; impersonation avoids a long-lived credential file to protect entirely |
+| #   | Decision                                                                                             | Alternatives considered                                                             | Rationale                                                       |
+| --- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 001 | v2 lives in the same repo as v1, as an additive `pipeline/`, `dashboards/`, and `infrastructure/` layer, documented in a separate file | Single combined ARCHITECTURE.md; separate repository                                | Shares `src/` and repo-wide conventions (CLAUDE.md, CI, dependency management) with v1 instead of duplicating them across two repos, while separate doc files (`ARCHITECTURE.md` vs `ARCHITECTURE_DASHBOARD.md`) keep each system's design reasoning independently readable without cross-referencing every decision |
+| 002 | Terraform provisions the GCS bucket and service account (`infrastructure/terraform/`)                | Manual setup via `gcloud`/console                                                   | Reproducible, versioned, self-documenting infra; matches the free-tier setup exactly and can be torn down/recreated without manual steps |
+| 003 | Developer impersonates the service account (`roles/iam.serviceAccountTokenCreator`) rather than a downloaded key | Downloaded service account key (`.json`)                                            | Org policy blocks key creation; impersonation avoids a long-lived credential file to protect entirely |
 | 004 | Each pipeline task (ingestion, processing, transform) runs in its own container                      | One container for everything; isolate every task uniformly ("one process per container" as a blanket rule) | Isolation is warranted by a real discriminator — a different runtime (PySpark needs a JVM) or a dependency-conflict risk with Airflow's own pinned packages (`dbt-core`, `ryanair-py`/`google-cloud-storage` version pins) — not by isolating for its own sake |
-| 005 | Apache Airflow for orchestration                                                                     | GitHub Actions, Databricks Workflows, dbt Cloud scheduler              | Airflow gives task-level retries, backfills, and dependency-aware scheduling needed to run ingest → processing → transform as one DAG with per-task state; GitHub Actions is a CI/CD tool without native backfill/catchup, and the dbt Cloud scheduler only covers the dbt step, not the whole pipeline. Databricks Workflows isn't available on Community Edition |
-| 006 | Airflow runs locally via Docker Compose                                                              | Always-on Cloud Composer                                               | Always-on managed Airflow isn't free; local Docker Compose is free forever and sufficient to develop and demo the DAG |
-| 007 | Reuse v1's scraper/cache (`src/`) as pipeline ingestion source                                       | Separate scraper implementation for pipeline                           | One source of truth; avoids duplicated scraping logic and drift |
+| 005 | Apache Airflow for orchestration                                                                     | GitHub Actions, Databricks Workflows, dbt Cloud scheduler                           | Airflow gives task-level retries, backfills, and dependency-aware scheduling needed to run ingest → processing → transform as one DAG with per-task state; GitHub Actions is a CI/CD tool without native backfill/catchup, and the dbt Cloud scheduler only covers the dbt step, not the whole pipeline. Databricks Workflows isn't available on Community Edition |
+| 006 | Airflow runs locally via Docker Compose                                                              | Always-on Cloud Composer                                                            | Always-on managed Airflow isn't free; local Docker Compose is free forever and sufficient to develop and demo the DAG |
+| 007 | Reuse v1's scraper/cache (`src/`) as pipeline ingestion source                                       | Separate scraper implementation for pipeline                                        | One source of truth; avoids duplicated scraping logic and drift |
 | 008 | Scrape-origins list stays a hardcoded Python constant (`SCRAPE_ORIGINS` in `src/config.py`)          | GCS-hosted config file (`scrape_origin.json`, checked GCS-first with local fallback) — implemented, then reverted; Airflow Variable | Tried the GCS-hosted version: `cache.py` is the only module allowed to depend on `google-cloud-storage` (see decision #004), but the DAG needs `SCRAPE_ORIGINS` at parse time from a module copied into the Airflow image *without* that dependency. Landing the origins list anywhere the DAG imports from would force either installing `google-cloud-storage` in the Airflow image (reopening #004's exact dependency-conflict risk) or keeping two separate origins sources (DAG's static list vs. ingestion's GCS-checked one) that could drift. Not worth the complexity for a list of ~50 airport codes that changes rarely — reverted to the plain constant |
-| 009 | GCS for bronze/silver landing                                                                        | S3, Azure Blob                                                         | Same-cloud integration with BigQuery (native external-table support over GCS, no cross-cloud auth or egress); free tier covers current data volume |
-| 010 | v1 CLI checks GCS before scraping; local cache is fallback-only, used when GCS itself is unreachable | Keep v1 and v2 caches fully separate (original design)                 | Sharing a single GCS cache lets an on-demand CLI search and the scheduled pipeline avoid duplicating scrape cost, while local cache still guarantees v1 works with no GCP access at all |
-| 011 | Pipeline skips an origin if today's exact-date GCS blob for it already exists                        | Always re-scrape every origin on every scheduled run                   | Avoids duplicate scraping when the CLI has already triggered an on-demand scrape for that origin earlier the same day |
-| 012 | Bronze is not loaded into or exposed in BigQuery — only silver (external table) and gold (native) reach it | Expose raw bronze in BigQuery (e.g. a `raw_flights` table)             | Nothing in the pipeline needs it — Processing reads bronze directly from GCS; would just be an unused warehouse surface with no consumer today |
-| 013 | Local PySpark (`local[*]` mode)                                                                      | Databricks Community Edition, Dataproc                                 | No external account/cluster dependency and nothing to spin up; at this project's data volume (single-digit GB, daily batch) there's no functional need for a managed cluster (containerized separately from Airflow per decision #4) |
-| 014 | Silver stays in GCS as Parquet, not written directly to BigQuery                                     | PySpark writes directly to BigQuery via the `spark-bigquery-connector` | The connector stages writes through GCS internally anyway, so it doesn't remove the GCS dependency — just adds one more piece of infrastructure. Also keeps a consistent bronze+silver-in-the-lake / gold-in-the-warehouse medallion pattern, with silver durable and warehouse-independent |
-| 015 | BigQuery as the warehouse                                                                            | Databricks SQL warehouse, Snowflake                                    | Serverless (no cluster sizing), columnar storage suited to the star-schema query pattern here, and native `dbt-bigquery` + GCS integration within the same GCP project/IAM boundary already used elsewhere; free tier persists indefinitely, unlike Snowflake's time-boxed trial which would force a later migration |
-| 016 | Silver is exposed to BigQuery as an external table over GCS, not loaded into a native table          | Native GCS → BigQuery load job before each `dbt run`                   | An external table is a near-free DDL pointer, not a data-moving job; `dbt run` already does the real read-and-transform work when it queries the external table and materializes gold, so a separate load step would just be redundant data movement |
-| 017 | dbt Core (not dbt Cloud)                                                                             | dbt Cloud free tier                                                    | No login/seat limits; Airflow already handles scheduling for the whole pipeline, so dbt Cloud's built-in scheduler isn't needed |
-| 018 | Looker Studio dashboard, connected directly to BigQuery                                              | Tableau Public (+ Sheets export), Power BI Desktop                     | Native BigQuery connector needs no export/bridge step, unlike Tableau Public which can't connect to BigQuery directly; free, and its sharing model supports both public links and restricted access, unlike Tableau Public (public-only) or Power BI Desktop (no live link without a paid Service license) |
-| 019 | CI (`.github/workflows/ingestion-image.yml`) builds and pushes the ingestion image to GHCR on every relevant push to `main`, but local Docker Compose/Airflow keep building `:dev` locally rather than pulling from GHCR | Switch local Docker Compose/DAG to pull the GHCR image instead of building locally | Pulling from GHCR would slow local iteration (commit → push → wait for CI → pull, vs. an immediate local rebuild) for no benefit while the pipeline is still under active development. Revisit once v2 (processing/transform/dashboard) is finished and local iteration speed matters less than running a CI-verified image |
+| 009 | GCS for bronze/silver landing                                                                        | S3, Azure Blob                                                                      | Same-cloud integration with BigQuery (native external-table support over GCS, no cross-cloud auth or egress); free tier covers current data volume |
+| 010 | v1 CLI checks GCS before scraping; local cache is fallback-only, used when GCS itself is unreachable | Keep v1 and v2 caches fully separate (original design)                              | Sharing a single GCS cache lets an on-demand CLI search and the scheduled pipeline avoid duplicating scrape cost, while local cache still guarantees v1 works with no GCP access at all |
+| 011 | Pipeline skips an origin if today's exact-date GCS blob for it already exists                        | Always re-scrape every origin on every scheduled run                                | Avoids duplicate scraping when the CLI has already triggered an on-demand scrape for that origin earlier the same day |
+| 012 | Bronze is not loaded into or exposed in BigQuery — only silver (external table) and gold (native) reach it | Expose raw bronze in BigQuery (e.g. a `raw_flights` table)                          | Nothing in the pipeline needs it — Processing reads bronze directly from GCS; would just be an unused warehouse surface with no consumer today |
+| 013 | Local PySpark (`local[*]` mode)                                                                      | Databricks Community Edition, Dataproc                                              | No external account/cluster dependency and nothing to spin up; at this project's data volume (single-digit GB, daily batch) there's no functional need for a managed cluster (containerized separately from Airflow per decision #4) |
+| 014 | Silver stays in GCS as Parquet, not written directly to BigQuery                                     | PySpark writes directly to BigQuery via the `spark-bigquery-connector`              | The connector stages writes through GCS internally anyway, so it doesn't remove the GCS dependency — just adds one more piece of infrastructure. Also keeps a consistent bronze+silver-in-the-lake / gold-in-the-warehouse medallion pattern, with silver durable and warehouse-independent |
+| 015 | BigQuery as the warehouse                                                                            | Databricks SQL warehouse, Snowflake                                                 | Serverless (no cluster sizing), columnar storage suited to the star-schema query pattern here, and native `dbt-bigquery` + GCS integration within the same GCP project/IAM boundary already used elsewhere; free tier persists indefinitely, unlike Snowflake's time-boxed trial which would force a later migration |
+| 016 | Silver is exposed to BigQuery as an external table over GCS, not loaded into a native table          | Native GCS → BigQuery load job before each `dbt run`                                | An external table is a near-free DDL pointer, not a data-moving job; `dbt run` already does the real read-and-transform work when it queries the external table and materializes gold, so a separate load step would just be redundant data movement |
+| 017 | dbt Core (not dbt Cloud)                                                                             | dbt Cloud free tier                                                                 | No login/seat limits; Airflow already handles scheduling for the whole pipeline, so dbt Cloud's built-in scheduler isn't needed |
+| 018 | Looker Studio dashboard, connected directly to BigQuery                                              | Tableau Public (+ Sheets export), Power BI Desktop                                  | Native BigQuery connector needs no export/bridge step, unlike Tableau Public which can't connect to BigQuery directly; free, and its sharing model supports both public links and restricted access, unlike Tableau Public (public-only) or Power BI Desktop (no live link without a paid Service license) |
+| 019 | CI (`.github/workflows/ingestion-image.yml`) builds and pushes the ingestion image to GHCR on every relevant push to `main`, but local Docker Compose/Airflow keep building `:dev` locally rather than pulling from GHCR | Switch local Docker Compose/DAG to pull the GHCR image instead of building locally  | Pulling from GHCR would slow local iteration (commit → push → wait for CI → pull, vs. an immediate local rebuild) for no benefit while the pipeline is still under active development. Revisit once v2 (processing/transform/dashboard) is finished and local iteration speed matters less than running a CI-verified image |
 | 020 | DagRun-failure alerting logs a single line rather than emailing/paging; a separate always-succeeding task (not `retry_failed_ingests`) handles per-origin/aggregate reporting | SMTP/Slack integration in Docker Compose; folding stats into `retry_failed_ingests` | No mail server exists in the stack yet; a log line is a cheap floor, and a separate task keeps per-origin visibility without blocking retries |
-| 021 | `flight_key = sha2(origin \| destination \| departure_date \| airline)` — the identity of one route-day's cheapest fare, enforced end-to-end (silver's derivation and uniqueness gate, ingestion's retry-merge dedupe) | The original physical-flight key (`+ departure_time + flight_number`, no airline); Python's `hash()` (per-process-randomized, breaks rerun idempotency) | The feed returns one cheapest fare per route-day, so a finer-grained key manufactures churn instead of identity: displacement read as a fake removal + fake new flight, and a retry observing a different cheapest broke the grain outright (2026-07-12). Under the route-day key, displacement is a price change on a stable key; `departure_time`/`flight_number` are attributes. Grain verification and details in PROCESSING.md |
+| 021 | `flight_key = sha2(origin \| destination \| departure_date \| airline)` — the identity of one route-day's cheapest fare, enforced end-to-end (silver's derivation and uniqueness gate, ingestion's retry-merge dedupe) | The original physical-flight key (`+ departure_time + flight_number`, no airline); Python's `hash()` (per-process-randomized, breaks rerun idempotency) | The feed returns one cheapest fare per route-day, so a finer-grained key manufactures churn instead of identity: displacement read as a fake removal + fake new flight, and a retry observing a different cheapest broke the grain outright (2026-07-12). Under the route-day key, displacement is a price change on a stable key; `departure_time`/`flight_number` are attributes. Grain verification and details in the Silver Schema section above |
 
 ## External Dependencies
 
 **Active:**
 
 | Name                      | Purpose                                            | Docs                                                                 |
-|---------------------------|----------------------------------------------------|----------------------------------------------------------------------|
+| ------------------------- | -------------------------------------------------- | -------------------------------------------------------------------- |
 | terraform                 | IaC tool (provisions GCS bucket + service account) | https://developer.hashicorp.com/terraform                            |
 | terraform-provider-google | GCP provider plugin for Terraform                  | https://registry.terraform.io/providers/hashicorp/google/latest/docs |
 | google-cloud-storage      | Read/write bronze and silver data to GCS           | https://cloud.google.com/python/docs/reference/storage/latest        |
@@ -193,7 +246,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
 **Planned, not yet active:**
 
 | Name                            | Purpose                                                        | Docs                                                                              |
-|---------------------------------|----------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| ------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | pyspark                         | Data cleaning/transformation, local Spark session (no cluster) | https://spark.apache.org/docs/latest/api/python/                                  |
 | dbt-core / dbt-bigquery         | Transform silver → gold, testing, docs                         | https://docs.getdbt.com                                                           |
 | apache-airflow                  | DAG definition and orchestration                               | https://airflow.apache.org/docs/                                                  |
@@ -214,6 +267,7 @@ Failures are retried at two different layers — Airflow task retries and an in-
 
 ## Open Questions
 
+- [ ] No refresh/backfill mechanism exists: regenerating silver history or backfilling bronze has no defined procedure for rebuilding gold (which tables, in what order, and how stateful ones are carried across) — needs an explicit runbook or automation
 - [ ] Dashboard analysis/design: what exact metrics, breakdowns, and visualizations does the dashboard need? Blocks the exact gold star schema (see `pipeline/transform/`)
 - [ ] Looker Studio vs. Tableau Public: is Looker Studio's visualization depth sufficient, or does the analysis need richer charting/interactivity that would justify the Tableau + Sheets-export trade-off instead?
 - [ ] Data quality checks: a CI smoke test catches crash-level bugs in the ingestion image, but content-level validation (price bounds, null checks, anomaly detection) is still untouched, pending the dbt/gold layer
@@ -231,8 +285,8 @@ Failures are retried at two different layers — Airflow task retries and an in-
 ## Decision Log (ADR summary)
 
 | ADR | Decision                                                                                          | Status   |
-|-----|---------------------------------------------------------------------------------------------------|----------|
-| 001 | v2 documented in a separate file (`ARCHITECTURE_DASHBOARD.md`), own ADR numbering                  | Accepted |
+| --- | ------------------------------------------------------------------------------------------------- | -------- |
+| 001 | v2 documented in a separate file (`ARCHITECTURE_DASHBOARD.md`), own ADR numbering                 | Accepted |
 | 002 | Terraform provisions the GCS bucket and service account                                           | Accepted |
 | 003 | Developer impersonates the service account instead of using a downloaded key                      | Accepted |
 | 004 | Container-per-task topology for the pipeline                                                      | Accepted |

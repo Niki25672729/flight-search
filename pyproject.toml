@@ -11,6 +11,7 @@ dependencies = [
     "rich>=13.7.0,<14",
     "google-cloud-storage>=2.18.0",
     "ryanair-py==3.0.0",
+    "pyspark>=3.5.0,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +37,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src", "pipeline/ingestion", "infrastructure/airflow/dags"]
+pythonpath = ["src", "pipeline/ingestion", "pipeline/processing", "infrastructure/airflow/dags"]
 tmp_path_retention_policy = "failed"
 
 [tool.ruff]
@@ -48,3 +49,5 @@ skip-magic-trailing-comma = true
 [tool.mypy]
 ignore_missing_imports = true
 python_version = "3.12"
+mypy_path = "src"
+explicit_package_bases = true
