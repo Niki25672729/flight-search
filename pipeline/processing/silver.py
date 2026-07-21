@@ -131,7 +131,7 @@ def compute_price_history(today: DataFrame, prior: DataFrame, run_date: str) -> 
 def write_partitioned(df: DataFrame, path: str) -> None:
     """Partition-overwrite by scrape_date — replaces only that partition, so a retry re-running
     the same run_date replaces that day's rows instead of accumulating duplicates via append."""
-    df.write.mode("overwrite").partitionBy("scrape_date").parquet(path)
+    df.coalesce(1).write.mode("overwrite").partitionBy("scrape_date").parquet(path)
 
 
 # ---------------------------
