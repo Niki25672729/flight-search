@@ -23,6 +23,7 @@ COMMON_ENVIRONMENT = {
     "FLIGHT_SEARCH_GCS_BUCKET": os.environ["FLIGHT_SEARCH_GCS_BUCKET"],
     "GOOGLE_CLOUD_PROJECT": os.environ["GOOGLE_CLOUD_PROJECT"],
     "GOOGLE_APPLICATION_CREDENTIALS": GCS_CREDENTIALS_TARGET,
+    "BRONZE_GCS_PREFIX": os.environ.get("BRONZE_GCS_PREFIX", "bronze"),
 }
 COMMON_MOUNTS = [
     Mount(source=os.environ["HOST_GCLOUD_ADC_PATH"], target=GCS_CREDENTIALS_TARGET, type="bind", read_only=True)
@@ -119,7 +120,7 @@ with DAG(
     # Bronze -> silver. Runs strictly after retry_failed_ingests so the day's bronze is as complete as it will get; run_silver's own
     # assert_bronze_complete still fails this task loudly if any origin is missing. Bronze/output
     # roots default to the real GCS layers inside the image (FLIGHT_SEARCH_GCS_BUCKET +
-    # SILVER_GCS_PREFIX), so the command only carries the run date.
+    # BRONZE_GCS_PREFIX/SILVER_GCS_PREFIX), so the command only carries the run date.
     process_bronze_to_silver = DockerOperator(
         task_id="process_bronze_to_silver",
         image=PROCESSING_IMAGE,

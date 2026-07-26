@@ -88,6 +88,7 @@ services:
       FLIGHT_SEARCH_GCS_BUCKET: ${FLIGHT_SEARCH_GCS_BUCKET}
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_APPLICATION_CREDENTIALS: /app/gcloud/application_default_credentials.json
+      BRONZE_GCS_PREFIX: ${BRONZE_GCS_PREFIX:-bronze}
     volumes:
       - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro
 
@@ -104,6 +105,7 @@ services:
       FLIGHT_SEARCH_GCS_BUCKET: ${FLIGHT_SEARCH_GCS_BUCKET}
       GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
       GOOGLE_APPLICATION_CREDENTIALS: /app/gcloud/application_default_credentials.json
+      BRONZE_GCS_PREFIX: ${BRONZE_GCS_PREFIX:-bronze}
       SILVER_GCS_PREFIX: ${SILVER_GCS_PREFIX:-silver}
     volumes:
       - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro

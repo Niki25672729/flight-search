@@ -35,7 +35,19 @@ resource "google_storage_bucket" "flight_data" {
   lifecycle_rule {
     condition {
       age            = 90
-      matches_prefix = ["bronze/"]
+      matches_prefix = ["${var.bronze_gcs_prefix}/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Only the fat snapshots expire. flight_price_history is kept indefinitely: small, and
+  # impossible to recompute once the snapshots it was derived from age out.
+  lifecycle_rule {
+    condition {
+      age            = 90
+      matches_prefix = ["${var.silver_gcs_prefix}/flights_latest_state/"]
     }
     action {
       type = "Delete"
