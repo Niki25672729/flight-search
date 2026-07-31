@@ -1,0 +1,16 @@
+name: "flight_search_transform"
+version: "1.0.0"
+config-version: 2
+
+profile: "flight_search_transform"
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  flight_search_transform:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

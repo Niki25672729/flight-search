@@ -1,0 +1,16 @@
+# Auth is OAuth via Application Default Credentials, not a downloaded key — same impersonation
+# convention as the rest of the pipeline (ARCHITECTURE_DASHBOARD.md decision #003; see also
+# run_silver.py's build_spark_session, which authenticates the same way for the GCS connector).
+# No secrets live in this file, so unlike most dbt setups it's safe to commit.
+flight_search_transform:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GOOGLE_CLOUD_PROJECT') }}"
+      dataset: "{{ env_var('BIGQUERY_DATASET') }}"
+      location: "{{ env_var('BIGQUERY_LOCATION', 'us-central1') }}"
+      threads: 4
+      job_execution_timeout_seconds: 300
+      job_retries: 3

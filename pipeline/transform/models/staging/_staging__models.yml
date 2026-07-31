@@ -1,0 +1,41 @@
+version: 2
+
+models:
+  - name: stg_flights_latest_state
+    description: Typed pass-through of flights_latest_state, filtered to the run_date partition so a missing silver write fails loud instead of reading yesterday's.
+    columns:
+      - name: flight_key
+        description: sha2(origin, destination, departure_date, airline) — identity of one route-day's cheapest fare.
+        tests:
+          - not_null
+          - unique
+      - name: origin_iata
+        tests:
+          - not_null
+      - name: destination_iata
+        tests:
+          - not_null
+      - name: departure_time
+        tests:
+          - not_null
+      - name: price_eur
+        tests:
+          - not_null
+
+  - name: stg_flight_price_history
+    description: Typed pass-through of flight_price_history, filtered to the run_date partition.
+    columns:
+      - name: flight_key
+        description: One row per flight_key at this grain — a route-day's price changes at most once per run_date.
+        tests:
+          - not_null
+          - unique
+      - name: scrape_date
+        tests:
+          - not_null
+      - name: price_eur
+        tests:
+          - not_null
+      - name: is_new_flight
+        tests:
+          - not_null

@@ -1,0 +1,52 @@
+version: 2
+
+sources:
+  - name: silver
+    description: BigQuery external tables (infrastructure/terraform/bigquery.tf) over the Parquet silver layer in GCS — require_partition_filter=true, every query including subqueries must filter on scrape_date.
+    database: "{{ env_var('GOOGLE_CLOUD_PROJECT') }}"
+    schema: "{{ env_var('BIGQUERY_DATASET') }}"
+    tables:
+      - name: flights_latest_state_external
+        description: 1 row / flight_key x scrape_date — one full-snapshot partition per day, accumulating (never overwritten); "current state" = the newest partition.
+        loaded_at_field: timestamp(scrape_date)
+        freshness:
+          warn_after: {count: 30, period: hour}
+          error_after: {count: 48, period: hour}
+        columns:
+          - name: flight_key
+            description: Not unique at this grain — the same flight_key repeats once per day it was observed.
+            tests:
+              - not_null
+          - name: origin_iata
+            tests:
+              - not_null
+          - name: destination_iata
+            tests:
+              - not_null
+          - name: departure_time
+            tests:
+              - not_null
+          - name: price_eur
+            tests:
+              - not_null
+      - name: flight_price_history_external
+        description: >
+          1 row / flight_key x scrape_date, only when new or price-changed.
+        loaded_at_field: timestamp(scrape_date)
+        freshness:
+          warn_after: {count: 30, period: hour}
+          error_after: {count: 48, period: hour}
+        columns:
+          - name: flight_key
+            description: Not unique at this grain — the same flight_key repeats once per day its price changed.
+            tests:
+              - not_null
+          - name: scrape_date
+            tests:
+              - not_null
+          - name: price_eur
+            tests:
+              - not_null
+          - name: is_new_flight
+            tests:
+              - not_null
