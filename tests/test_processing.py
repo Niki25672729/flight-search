@@ -92,6 +92,15 @@ def _row_set(df, scrape_date_literal: str) -> set:
 # ---------------------------
 
 
+@pytest.fixture(autouse=True)
+def frozen_time():
+    """Overrides conftest's autouse freeze_time with a no-op — this file's tests hardcode every
+    timestamp they need (bronze rows, run_date strings) and never touch datetime.now(), while
+    freezegun's frozen time hangs PySpark's py4j JVM bridge indefinitely (confirmed: the same
+    process_day calls run in ~15s with real time vs. never completing under freeze_time)."""
+    yield None
+
+
 @pytest.fixture(scope="session")
 def spark():
     """One local Spark session for the whole processing test run (session-scoped — bootstrap is
@@ -138,8 +147,13 @@ def seeded_bronze_root(bronze_root) -> str:
         _bronze_row(flight_number="FR5", departure_time="2026-07-28T18:25:00", price_eur=53.97),
     ]
     bcn_row = _bronze_row(
-        origin_iata="BCN", destination_iata="DUB", destination_city="Dublin",
-        destination_country="Ireland", flight_number="FR4", departure_time="2026-07-12T09:00:00", price_eur=30.00,
+        origin_iata="BCN",
+        destination_iata="DUB",
+        destination_city="Dublin",
+        destination_country="Ireland",
+        flight_number="FR4",
+        departure_time="2026-07-12T09:00:00",
+        price_eur=30.00,
     )
     _write_bronze_day(bronze_root, "20260707", agp_day1)
     _write_bronze_day(bronze_root, "20260707", [bcn_row], origin="BCN")
@@ -308,11 +322,7 @@ def test_diff_rows_are_exactly_the_new_and_changed_route_days(spark, seeded_bron
     for run_date in ("20260707", "20260708"):
         process_day(spark, seeded_bronze_root, output_root, AIRLINE, ORIGINS, run_date)
 
-    rows = (
-        spark.read.parquet(price_history_path(output_root))
-        .filter("scrape_date = to_date('2026-07-08')")
-        .collect()
-    )
+    rows = spark.read.parquet(price_history_path(output_root)).filter("scrape_date = to_date('2026-07-08')").collect()
     by_flight = {row.flight_number: row for row in rows}
     assert set(by_flight) == {"FR2", "FR9", "FR5"}
 
