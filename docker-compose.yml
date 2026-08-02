@@ -10,6 +10,7 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     FLIGHT_SEARCH_GCS_BUCKET: ${FLIGHT_SEARCH_GCS_BUCKET}
     GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+    BIGQUERY_DATASET: ${BIGQUERY_DATASET}
     GOOGLE_APPLICATION_CREDENTIALS: /opt/airflow/gcloud/application_default_credentials.json
     # Real host path (not a path inside this container) — DockerOperator launches
     # sibling containers via the Docker socket, so its own volume mounts are
@@ -50,7 +51,9 @@ services:
         airflow users create
         --username admin --password admin
         --firstname Admin --lastname User
-        --role Admin --email admin@example.com
+        --role Admin --email admin@example.com &&
+        airflow pools set silver_processing 4
+        "Caps concurrent silver runs at 4 -- local[1]/1g per session to fit Docker's memory budget"
 
   airflow-webserver:
     <<: *airflow-common
@@ -107,6 +110,22 @@ services:
       GOOGLE_APPLICATION_CREDENTIALS: /app/gcloud/application_default_credentials.json
       BRONZE_GCS_PREFIX: ${BRONZE_GCS_PREFIX:-bronze}
       SILVER_GCS_PREFIX: ${SILVER_GCS_PREFIX:-silver}
+    volumes:
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro
+
+  # Build with `docker-compose build transform`; run ad hoc with `docker-compose run --rm
+  # transform` (defaults to `dbt run`, per the Dockerfile's CMD) or `docker-compose run --rm
+  # transform test`. Talks to BigQuery only, not GCS directly, so no bucket/prefix env vars needed.
+  transform:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/transform/Dockerfile
+    image: flight-search-transform:dev
+    profiles: ["tools"]
+    environment:
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      BIGQUERY_DATASET: ${BIGQUERY_DATASET}
+      GOOGLE_APPLICATION_CREDENTIALS: /app/gcloud/application_default_credentials.json
     volumes:
       - ${HOME}/.config/gcloud/application_default_credentials.json:/app/gcloud/application_default_credentials.json:ro
 

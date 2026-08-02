@@ -1,7 +1,6 @@
 -- Every surviving row must still actually pass the discount criteria against today's baseline —
--- if this fires, either mart_discounts' own filter has a bug, or insert_overwrite isn't correctly
--- excluding a rebound. 0.60 must match mart_discounts.sql's discount_ratio (not shared via var()
--- since it's a file-local Jinja set, not a project-wide config value).
+-- if this fires, either mart_discounts' own filter has a bug, or its rebound-delete post-hook
+-- isn't correctly removing one.
 select
     m.flight_key,
     m.price_eur,
@@ -15,7 +14,7 @@ join {{ ref('int_flight_price_baseline') }} b
     and b.departure_month = extract(month from m.departure_date)
     and b.departure_year = extract(year from m.departure_date)
 where not (
-    m.price_eur <= 0.60 * ({{ pooled_avg_price('b.sum_price_eur', 'b.sample_count') }})
+    m.price_eur <= {{ var('discount_ratio') }} * ({{ pooled_avg_price('b.sum_price_eur', 'b.sample_count') }})
     and m.price_eur <= ({{ pooled_avg_price('b.sum_price_eur', 'b.sample_count') }})
         - {{ pooled_stddev_price('b.sum_price_eur', 'b.sum_sq_price_eur', 'b.sample_count') }}
 )

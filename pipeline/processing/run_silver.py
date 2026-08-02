@@ -32,9 +32,12 @@ _SILVER_GCS_PREFIX = os.environ.get("SILVER_GCS_PREFIX", "silver")
 
 def build_spark_session(app_name: str = "flight-silver", needs_gcs: bool = False) -> SparkSession:
     """
-    Local Spark only — no external cluster. UTC session timezone keeps timestamp read/write
-    deterministic regardless of the host's local TZ/DST.
-    Driver memory is bumped from Spark's 1g default — local[*] runs driver and executors in one
+    Local Spark only — no external cluster. local[1] (not local[*]) caps each session to one core,
+    since Airflow runs up to silver_processing pool's slot count of these concurrently — local[*]
+    would have them compete for the whole host's CPU instead.
+    UTC session timezone keeps timestamp read/write deterministic regardless of the host's local
+    TZ/DST.
+    Driver memory is bumped from Spark's 1g default — local mode runs driver and executors in one
     JVM, and a real (non-empty) prior-state join plus a GCS multipart write OOM'd at the default
     once flights_latest_state held real data (first hit on a second real day's run, not day one's
     trivial empty-prior case). Overridable via SPARK_DRIVER_MEMORY for a bigger/smaller host.
@@ -45,7 +48,7 @@ def build_spark_session(app_name: str = "flight-silver", needs_gcs: bool = False
     impersonation-not-a-downloaded-key decision rather than a new credential file.
     """
     builder = (
-        SparkSession.builder.master("local[*]")
+        SparkSession.builder.master("local[1]")
         .appName(app_name)
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.driver.memory", _DRIVER_MEMORY)

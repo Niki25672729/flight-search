@@ -53,14 +53,15 @@ class _FakeDagRun:
 def dag(monkeypatch):
     """
     Imports flight_pipeline_dag fresh, with the env vars it reads at module import time
-    (FLIGHT_SEARCH_GCS_BUCKET, GOOGLE_CLOUD_PROJECT, HOST_GCLOUD_ADC_PATH) stubbed -- the real
-    values only exist inside the Airflow container. Reloads on every test rather than relying on
-    sys.modules's cache, so each test builds the DAG independently.
+    (FLIGHT_SEARCH_GCS_BUCKET, GOOGLE_CLOUD_PROJECT, BIGQUERY_DATASET, HOST_GCLOUD_ADC_PATH)
+    stubbed -- the real values only exist inside the Airflow container. Reloads on every test
+    rather than relying on sys.modules's cache, so each test builds the DAG independently.
 
     Purely structural: never calls DockerOperator.execute(), so nothing here touches Docker.
     """
     monkeypatch.setenv("FLIGHT_SEARCH_GCS_BUCKET", "test-bucket")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("BIGQUERY_DATASET", "test-dataset")
     monkeypatch.setenv("HOST_GCLOUD_ADC_PATH", "/tmp/fake_adc.json")
 
     import flight_pipeline_dag
@@ -100,7 +101,9 @@ def test_default_args_retry_policy(dag):
 def test_task_dependency_chain(dag):
     """Tests the full task chain: check_gcs_accessible -> ingest_flights -> retry_failed_ingests
     -> {generate_run_report, process_bronze_to_silver} -- reporting and processing both wait for
-    the retry pass (the day's bronze is as complete as it will get), then run independently."""
+    the retry pass (the day's bronze is as complete as it will get), then run independently.
+    process_bronze_to_silver -> transform_silver_to_gold: gold must not build off a silver that
+    never finished writing."""
     assert dag.task_dict["check_gcs_accessible"].downstream_task_ids == {"ingest_flights"}
     assert dag.task_dict["ingest_flights"].downstream_task_ids == {"retry_failed_ingests"}
     assert dag.task_dict["retry_failed_ingests"].downstream_task_ids == {
@@ -108,7 +111,8 @@ def test_task_dependency_chain(dag):
         "process_bronze_to_silver",
     }
     assert dag.task_dict["generate_run_report"].downstream_task_ids == set()
-    assert dag.task_dict["process_bronze_to_silver"].downstream_task_ids == set()
+    assert dag.task_dict["process_bronze_to_silver"].downstream_task_ids == {"transform_silver_to_gold"}
+    assert dag.task_dict["transform_silver_to_gold"].downstream_task_ids == set()
 
 
 def test_process_bronze_to_silver_command_and_gating(dag):
@@ -125,6 +129,26 @@ def test_process_bronze_to_silver_command_and_gating(dag):
     ]
     assert task.trigger_rule == "all_success"
     assert task.environment["SILVER_GCS_PREFIX"] == "silver"
+    assert task.environment["SPARK_DRIVER_MEMORY"] == "1g"
+    assert task.pool == "silver_processing"
+
+
+def test_transform_silver_to_gold_command_and_gating(dag):
+    """Tests the transform task runs `dbt build` (seed + run + test, in dependency order), passes
+    run_date via --vars (same templated value as process_bronze_to_silver's --run-date, so
+    stg_flights_latest_state/stg_flight_price_history filter on the same day silver just wrote),
+    and uses all_success — gold must NOT be built from a silver write that never completed."""
+    task = dag.task_dict["transform_silver_to_gold"]
+    assert task.command == ["build", "--vars", '{"run_date": "{{ data_interval_end | ds_nodash }}"}']
+    assert task.trigger_rule == "all_success"
+    assert task.environment["BIGQUERY_DATASET"] == "test-dataset"
+
+
+def test_transform_silver_to_gold_depends_on_past(dag):
+    """Tests depends_on_past is set on transform_silver_to_gold specifically (not the whole DAG) --
+    prevents two backfilled dates' dbt builds from racing on the same full-rebuild gold tables."""
+    assert dag.task_dict["transform_silver_to_gold"].depends_on_past is True
+    assert dag.task_dict["process_bronze_to_silver"].depends_on_past is False
 
 
 def test_on_failure_callback_is_wired(dag):

@@ -16,19 +16,29 @@ sources:
           - name: flight_key
             description: Not unique at this grain — the same flight_key repeats once per day it was observed.
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: origin_iata
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: destination_iata
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: departure_time
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: price_eur
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
       - name: flight_price_history_external
         description: >
           1 row / flight_key x scrape_date, only when new or price-changed.
@@ -40,13 +50,21 @@ sources:
           - name: flight_key
             description: Not unique at this grain — the same flight_key repeats once per day its price changed.
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: scrape_date
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: price_eur
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"
           - name: is_new_flight
             tests:
-              - not_null
+              - not_null:
+                  config:
+                    where: "scrape_date = parse_date('%Y%m%d', '{{ var('run_date') }}')"

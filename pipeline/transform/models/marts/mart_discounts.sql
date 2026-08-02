@@ -1,20 +1,42 @@
-{% set discount_ratio = 0.60 %}
 {% set near_low_ratio = 1.10 %}
 
 -- depends_on: {{ ref('stg_flight_price_history') }}
 {{
     config(
         materialized='incremental',
-        incremental_strategy='insert_overwrite',
+        unique_key='flight_key',
+        incremental_strategy='merge',
         post_hook=[
             "delete from {{ this }} where departure_date < current_date()",
+            "delete from {{ this }} t
+             where exists (
+                 select 1
+                 from {{ ref('int_flight_price_baseline') }} b
+                 where b.origin_iata = t.origin_iata
+                   and b.destination_iata = t.destination_iata
+                   and b.airline = t.airline
+                   and b.departure_weekday = format_date('%A', t.departure_date)
+                   and b.departure_month = extract(month from t.departure_date)
+                   and b.departure_year = extract(year from t.departure_date)
+                   and b.sample_count >= 3
+                   and not (
+                       t.price_eur <= {{ var('discount_ratio') }} * ({{ pooled_avg_price('b.sum_price_eur', 'b.sample_count') }})
+                       and t.price_eur <= ({{ pooled_avg_price('b.sum_price_eur', 'b.sample_count') }})
+                           - {{ pooled_stddev_price('b.sum_price_eur', 'b.sum_sq_price_eur', 'b.sample_count') }}
+                   )
+             )",
         ],
     )
 }}
 
--- "Deals worth acting on" — ACTIVE discounts, republished whole every build
--- (incremental_strategy='insert_overwrite'): a flight_key absent from the result is dropped
--- automatically, no delete-on-rebound DML needed.
+-- "Deals worth acting on" — ACTIVE discounts, merged incrementally (unique_key=flight_key). A
+-- rebounded flight_key is simply absent from the select, but merge alone can't remove existing
+-- rows (no MERGE...WHEN NOT MATCHED BY SOURCE THEN DELETE in dbt's macro) — the second post-hook
+-- re-checks every surviving row's own price against today's baseline and deletes it if it no
+-- longer passes, so a flight also exits when the baseline drifts, not just its own price.
+--
+-- discount_ratio is a project var (dbt_project.yml), not a local `set` -- post-hooks render in a
+-- separate Jinja pass with only global context, so a local `set` here would render blank there.
 --
 -- Steps:
 -- 1. Merge today's stg_flight_price_history events with yesterday's mart_discounts (first build
@@ -27,11 +49,8 @@
 --
 -- discount_rank orders freshest-discount country pair first, that pair's freshest route first
 -- within it, route's rows contiguous (country_pair_latest_dropped_on desc, route_latest_dropped_on
--- desc, dropped_on desc) — computed with window functions in the select itself, not a post-hook:
--- insert_overwrite already means this select's result IS the whole table, so it can see every row
--- it needs for the ranking without reading anything back afterward. Same reasoning applies to
--- days_at_low (date_diff against current_date() needs no post-hook either). The two grouping keys
--- behind the rank are intermediate-only, dropped before the final output.
+-- desc, dropped_on desc) — computed with window functions over the select's own result, since that
+-- result already is every currently-qualifying row (the same set merge writes out), not a subset.
 
 with {% if is_incremental() %} todays_events {% else %} flights {% endif %} as (
     select
@@ -94,12 +113,13 @@ candidate_events as (
 qualifying_events as (
     select *
     from candidate_events
-    where price_eur <= {{ discount_ratio }} * avg_price_eur
+    where price_eur <= {{ var('discount_ratio') }} * avg_price_eur
       and price_eur <= avg_price_eur - stddev_price_eur
-)
+),
 
 enriched as (
     select
+        n.flight_key,
         n.origin_iata,
         o.city as origin_city,
         o.country as origin_country,

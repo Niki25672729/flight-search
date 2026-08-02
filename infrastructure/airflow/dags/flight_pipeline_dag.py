@@ -15,6 +15,7 @@ from config import SCRAPE_ORIGINS
 
 INGESTION_IMAGE = "flight-search-ingestion:dev"
 PROCESSING_IMAGE = "flight-search-processing:dev"
+TRANSFORM_IMAGE = "flight-search-transform:dev"
 GCS_CREDENTIALS_TARGET = "/app/gcloud/application_default_credentials.json"
 TASK_EXECUTION_TIMEOUT = timedelta(minutes=30)
 CHECK_GCS_EXECUTION_TIMEOUT = timedelta(minutes=2)
@@ -133,13 +134,37 @@ with DAG(
         # build silver from incomplete bronze — assert_bronze_complete is the second line of
         # defense, not the first.
         trigger_rule="all_success",
+        # 4-slot pool caps concurrency, not order (silver is backfill-order-independent).
+        # local[1] + SPARK_DRIVER_MEMORY=1g below keeps 4 concurrent sessions inside Docker's
+        # memory budget.
+        pool="silver_processing",
         command=["--run-date", "{{ data_interval_end | ds_nodash }}", "--allow-overwrite", ALLOW_OVERWRITE_TEMPLATE],
-        environment={**COMMON_ENVIRONMENT, "SILVER_GCS_PREFIX": os.environ.get("SILVER_GCS_PREFIX", "silver")},
+        environment={
+            **COMMON_ENVIRONMENT,
+            "SILVER_GCS_PREFIX": os.environ.get("SILVER_GCS_PREFIX", "silver"),
+            "SPARK_DRIVER_MEMORY": "1g",
+        },
+        mounts=COMMON_MOUNTS,
+    )
+
+    # Silver -> gold; all_success mirrors process_bronze_to_silver's own trigger_rule — `dbt build`
+    # must not run against a silver write that never finished. depends_on_past is scoped to this
+    # task only, preventing concurrent backfilled dates from racing on the same full-rebuild gold
+    # tables.
+    transform_silver_to_gold = DockerOperator(
+        task_id="transform_silver_to_gold",
+        image=TRANSFORM_IMAGE,
+        docker_url="unix://var/run/docker.sock",
+        network_mode="bridge",
+        mount_tmp_dir=False,
+        auto_remove="force",
+        execution_timeout=TASK_EXECUTION_TIMEOUT,
+        depends_on_past=True,
+        trigger_rule="all_success",
+        command=["build", "--vars", '{"run_date": "{{ data_interval_end | ds_nodash }}"}'],
+        environment={**COMMON_ENVIRONMENT, "BIGQUERY_DATASET": os.environ["BIGQUERY_DATASET"]},
         mounts=COMMON_MOUNTS,
     )
 
     check_gcs_accessible >> ingest_flights >> retry_failed_ingests >> [generate_run_report, process_bronze_to_silver]
-
-    # transform (silver -> gold) joins after process_bronze_to_silver once its DAG wiring lands —
-    # it must depend on this task, not just share the schedule, and must set depends_on_past=True
-    # on the transform task itself (see ARCHITECTURE_DASHBOARD.md's Open Questions).
+    process_bronze_to_silver >> transform_silver_to_gold

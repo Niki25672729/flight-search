@@ -19,16 +19,16 @@ BRONZE_SCHEMA = StructType(
     [
         StructField("origin_iata", StringType(), nullable=False),
         StructField("destination_iata", StringType(), nullable=False),
-        StructField("destination_city", StringType(), nullable=True),
-        StructField("destination_country", StringType(), nullable=True),
-        StructField("airline", StringType(), nullable=True),
+        StructField("destination_city", StringType(), nullable=False),
+        StructField("destination_country", StringType(), nullable=False),
+        StructField("airline", StringType(), nullable=False),
         StructField("flight_number", StringType(), nullable=True),
         StructField("departure_time", StringType(), nullable=False),
         StructField("arrival_time", StringType(), nullable=True),
         StructField("price_eur", DoubleType(), nullable=False),
-        StructField("currency", StringType(), nullable=True),
+        StructField("currency", StringType(), nullable=False),
         StructField("seats_left", IntegerType(), nullable=True),
-        StructField("scraped_at", StringType(), nullable=True),
+        StructField("scraped_at", StringType(), nullable=False),
     ]
 )
 

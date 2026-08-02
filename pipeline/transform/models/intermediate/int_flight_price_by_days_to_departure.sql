@@ -1,3 +1,4 @@
+-- depends_on: {{ ref('stg_flights_latest_state') }}
 {{
     config(
         materialized='incremental',
@@ -19,15 +20,14 @@ with todays_observations as (
         airline,
         date(departure_time) as departure_date,
         price_eur,
-        scrape_date,
+{% if is_incremental() %}
+        date_diff(date(departure_time), parse_date('%Y%m%d', '{{ var("run_date") }}'), day) as days_to_departure
+    from {{ ref('stg_flights_latest_state') }}
+{% else %}
         date_diff(date(departure_time), scrape_date, day) as days_to_departure
-    from
-    {% if is_incremental() %}
-        {{ ref('stg_flights_latest_state') }}
-    {% else %}
-        {{ source('silver', 'flights_latest_state_external') }}
+    from {{ source('silver', 'flights_latest_state_external') }}
     where scrape_date >= '2000-01-01'  -- require_partition_filter=true needs a filter here even though this bootstrap wants all history — see bigquery.tf
-    {% endif %}
+{% endif %}
 ),
 
 bucketed as (

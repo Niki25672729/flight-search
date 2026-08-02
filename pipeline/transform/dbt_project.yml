@@ -8,6 +8,13 @@ model-paths: ["models"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
+vars:
+  # mart_discounts qualifies a flight_key at <=discount_ratio * pooled avg. A project var (not a
+  # model-local `set`) so it's readable from anywhere that needs it, including post-hook strings,
+  # which render in a separate Jinja pass with only global context (macros, var(), this) — a
+  # model-local `set` silently renders blank there instead of erroring.
+  discount_ratio: 0.60
+
 models:
   flight_search_transform:
     staging:

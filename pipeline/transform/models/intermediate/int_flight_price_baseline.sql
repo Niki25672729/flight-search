@@ -1,3 +1,4 @@
+-- depends_on: {{ ref('stg_flights_latest_state') }}
 {{
     config(
         materialized='incremental',
