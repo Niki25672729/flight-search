@@ -29,6 +29,12 @@ airflow = [
     "google-re2==1.1.20240702",
 ]
 
+transform = [
+    "dbt-core>=1.8,<2.0",
+    "dbt-bigquery>=1.8,<2.0",
+    "pandas<3",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 

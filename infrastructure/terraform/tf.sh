@@ -38,4 +38,9 @@ fi
 # catching anyone who calls `terraform` directly and skips the .env sourcing above.
 export TF_VAR_via_tf_sh="yes"
 
-exec terraform -chdir="$SCRIPT_DIR" "$@"
+# Only exec terraform if an argument was passed — lets this be sourced bare (`source tf.sh`,
+# from infrastructure/terraform/) purely to export the TF_VAR_*s into the current shell, so a
+# separate plain `terraform <command>` afterward picks them up without needing -chdir/exec here.
+if [ "$#" -gt 0 ]; then
+  exec terraform -chdir="$SCRIPT_DIR" "$@"
+fi
