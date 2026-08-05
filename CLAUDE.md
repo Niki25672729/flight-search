@@ -15,7 +15,7 @@ See ARCHITECTURE.md for full design decisions.
 ## Tech Stack
 
 | Layer          | Technology           | Version                             |
-|----------------|----------------------|-------------------------------------|
+| -------------- | -------------------- | ----------------------------------- |
 | Language       | Python               | 3.12+                               |
 | Ryanair client | ryanair-py           | 3.0.0                               |
 | HTTP           | requests             | latest (transitive, via ryanair-py) |
@@ -29,20 +29,20 @@ See ARCHITECTURE.md for full design decisions.
 **Future (not yet active):**
 
 | Layer           | Technology     | Notes                                |
-|-----------------|----------------|--------------------------------------|
+| --------------- | -------------- | ------------------------------------ |
 | HTML parser     | beautifulsoup4 | For scraping easyJet, Wizz Air, etc. |
 | Browser scraper | playwright     | For JS-heavy airline sites. Tried and removed for Ryanair itself (2026-07-07) — the endpoint it was working around (`booking/v4/availability`) isn't used anymore; ryanair-py's plain-`requests` session works fine for the endpoint actually used (`farfnd/v4/oneWayFares`) |
 
 **v2 pipeline (planned, see ARCHITECTURE_DASHBOARD.md — does not affect v1 CLI):**
 
-| Layer             | Technology                    | Notes                                                                               |
-|-------------------|-------------------------------|-------------------------------------------------------------------------------------|
-| IaC               | Terraform (`google` provider) | Provisions the GCS bucket + service account, see `infrastructure/terraform/`        |
-| Processing        | PySpark (local `local[*]`)    | No external cluster; runs in its own container                                      |
-| Landing/warehouse | GCS, BigQuery                 | GCP free tier                                                                       |
-| Transform         | dbt Core (dbt-bigquery)       | Not dbt Cloud                                                                       |
-| Orchestration     | Apache Airflow                | Local via Docker Compose                                                            |
-| Dashboard         | Looker Studio                 | Connects directly to BigQuery, not Power BI/Tableau                                 |
+| Layer             | Technology                    | Notes                                                                        |
+| ----------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| IaC               | Terraform (`google` provider) | Provisions the GCS bucket + service account, see `infrastructure/terraform/` |
+| Processing        | PySpark (local `local[*]`)    | No external cluster; runs in its own container                               |
+| Landing/warehouse | GCS, BigQuery                 | GCP free tier                                                                |
+| Transform         | dbt Core (dbt-bigquery)       | Not dbt Cloud                                                                |
+| Orchestration     | Apache Airflow                | Local via Docker Compose                                                     |
+| Dashboard         | Looker Studio                 | Connects directly to BigQuery, not Power BI/Tableau                          |
 
 ## Setup & Commands
 
@@ -59,59 +59,61 @@ uv run pytest
 # Run a single test file
 uv run pytest tests/test_scraper.py -v
 
+# Run dbt tests — parse/compile only
+uv run ./pipeline/transform/dbt_local_test.sh
+
+# Generate and view the dbt docs site (needs run_date var; catalog.json needs a live BigQuery connection)
+uv run dbt docs generate --project-dir pipeline/transform --profiles-dir pipeline/transform --vars '{"run_date": "20260731"}'
+uv run dbt docs serve --project-dir pipeline/transform --profiles-dir pipeline/transform
+
 # Lint
-uv run ruff check src/ pipeline/
+uv run ruff check src/ pipeline/ tests/
 
 # Format
-uv run ruff format src/ pipeline/
+uv run ruff format src/ pipeline/ tests/
 
 # Type-check
-uv run mypy src/ pipeline/
+uv run mypy src/ pipeline/ tests/
 ```
 
 ## Project Layout
 
 ```
 /
-├── src/
-│   ├── __init__.py                 # Package marker — do not modify
-│   ├── flight_search.py            # Entry point — orchestrates all modules
-│   ├── cli.py                      # Argument parsing and validation
-│   ├── config.py                   # All constants (cache, scraping, CLI, paths)
-│   ├── models.py                   # Shared data model — Flight dataclass
-│   ├── utils.py                    # Shared helpers — airport data loading
-│   ├── cache.py                    # Read/write local JSON cache
-│   ├── scraper.py                  # Scrape budget airline sites
-│   ├── display.py                  # Format and print results as table
-│   ├── eu_airports.json            # Static IATA to city/country lookup
-│   ├── ignored_airports.json       # Static IATA that ignored during flight search
-│   ├── ambiguous_airports.json     # Auto-generated — ambiguous IATA codes discovered during scraping
-│   └── unknown_airports.json       # Auto-generated — unknown IATA codes discovered during scraping
-├── tests/
-│   ├── conftest.py                 # Shared fixtures, constants and helpers
-│   ├── test_cli.py
-│   ├── test_cache.py
-│   ├── test_scraper.py
-│   ├── test_display.py
-│   └── test_flight_search.py
-├── cache/                          # Auto-generated cache files (gitignored)
+├── src/                             # v1 CLI + shared core lib
+│   ├── __init__.py                  # Package marker — do not modify
+│   ├── flight_search.py             # Entry point — orchestrates all modules
+│   ├── cli.py                       # Argument parsing and validation
+│   ├── config.py                    # All constants (cache, scraping, CLI, paths)
+│   ├── models.py                    # Shared data model — Flight dataclass
+│   ├── utils.py                     # Shared helpers — airport data loading
+│   ├── cache.py                     # Read/write cache — GCS first, local fallback
+│   ├── scraper.py                   # Scrape budget airline sites
+│   ├── display.py                   # Format and print results as table
+│   ├── eu_airports.json             # Static IATA to city/country lookup
+│   ├── ignored_airports.json        # Static IATA that ignored during flight search
+│   ├── ambiguous_airports.json      # Auto-generated — ambiguous IATA codes discovered during scraping
+│   └── unknown_airports.json        # Auto-generated — unknown IATA codes discovered during scraping
+├── tests/                           # pytest — one file per src/pipeline module, plus test_airflow.py for the DAG
+├── cache/                           # Auto-generated local cache files (gitignored)
 ├── infrastructure/
-│   ├── terraform/                  # IaC — GCS bucket + service account (impersonation, no downloaded keys)
-│   ├── docker/                     # Dockerfiles for each per-task container
-│   └── airflow/                    # Orchestration — Airflow DAG, runs locally via Docker Compose
-├── pipeline/                       # v2, planned — see ARCHITECTURE_DASHBOARD.md
-│   ├── ingestion/                  # Calls src/scraper.py, writes to GCS bronze
-│   ├── processing/                 # PySpark: bronze → silver
-│   └── transform/                  # dbt Core project: silver → gold
-├── dashboards/
-│   └── looker/                     # v2, planned — Looker Studio dashboard, connected directly to BigQuery
-├── ARCHITECTURE.md                 # v1 design
-├── ARCHITECTURE_DASHBOARD.md       # v2 design
+│   ├── terraform/                   # IaC — GCS bucket + service account (impersonation, no downloaded keys)
+│   ├── docker/                      # Dockerfiles: airflow, ingestion, processing, transform
+│   └── airflow/dags/                # flight_pipeline_dag.py + callbacks.py (DagRun-failure alert)
+├── pipeline/                        # v2 — see ARCHITECTURE_DASHBOARD.md
+│   ├── ingestion/                   # run.py (scheduled), manual_run.py, report.py — scrape → bronze via src/scraper.py
+│   ├── processing/                  # run_silver.py (scheduled), silver.py, bronze_reader.py, quality.py, fs.py — bronze → silver
+│   └── transform/                   # dbt Core project — silver → gold; models/{staging,intermediate,marts}, seeds/, macros/, tests/
+├── dashboards/                      # v2, planned — Looker Studio dashboard, connected directly to BigQuery
+├── docker-compose.yml               # Local Airflow stack
+├── .env / .env.example              # Shared config, sourced by tf.sh and Docker Compose
+├── ARCHITECTURE.md                  # v1 design
+├── ARCHITECTURE_DASHBOARD.md        # v2 design
 ├── CLAUDE.md
 └── pyproject.toml
 ```
 
-`pipeline/` and `dashboards/` are v2 and do not exist yet — build them additively. `src/` is v1 and must keep working standalone; `pipeline/ingestion/` should import from `src/`, never fork or copy its logic.
+`pipeline/` (ingestion, processing, transform) is v2 and now implemented — see ARCHITECTURE_DASHBOARD.md. `dashboards/` is v2 and not yet built. `src/` is v1 and must keep working standalone; `pipeline/ingestion/` should import from `src/`, never fork or copy its logic.
 
 Auto-generated files — do not commit:
 - `cache/` — flight data cache

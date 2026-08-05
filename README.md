@@ -58,7 +58,7 @@ If you fork or run this yourself, please keep request frequency low and cache ag
 ## Supported Airlines
 
 | Airline   | Status    |
-|-----------|-----------|
+| --------- | --------- |
 | Ryanair   | ✅ v1      |
 | easyJet   | 🔜 planned |
 | Wizz Air  | 🔜 planned |
@@ -98,7 +98,7 @@ python src/flight_search.py [departure] [destination] [timerange] [budget] [sort
 ```
 
 | Argument      | Format                                                  | Examples                            | Default         |
-|---------------|---------------------------------------------------------|-------------------------------------|-----------------|
+| ------------- | ------------------------------------------------------- | ----------------------------------- | --------------- |
 | `departure`   | IATA code, city, or country (EU only)                   | `EIN`, `Eindhoven`, `Netherlands`   | `EIN`           |
 | `destination` | IATA code, city, or country; `none` = any destination   | `BCN`, `Barcelona`, `Spain`, `none` | `none`          |
 | `timerange`   | `yyyy-mm-dd...yyyy-mm-dd`, or a single `yyyy-mm-dd` day | `2026-10-01...2026-10-30`           | today + 30 days |
@@ -140,28 +140,25 @@ python src/flight_search.py Eindhoven Kingdom 2026-10-01...2026-10-30 60
 ```
 /
 ├── src/
-│   ├── __init__.py           # Package marker — do not modify
-│   ├── flight_search.py      # Entry point
-│   ├── cli.py                # Argument parsing and validation
-│   ├── config.py             # Constants and file paths
-│   ├── models.py             # Flight dataclass
-│   ├── utils.py              # Airport data helpers
-│   ├── cache.py              # Local JSON cache
-│   ├── scraper.py            # Ryanair scraper
-│   ├── display.py            # Terminal table output
-│   └── eu_airports.json      # Static IATA lookup table
-├── tests/
-│   ├── conftest.py
-│   ├── test_cli.py
-│   ├── test_cache.py
-│   ├── test_scraper.py
-│   ├── test_display.py
-│   └── test_flight_search.py
-├── ARCHITECTURE.md           # v1 system design and decisions
-├── ARCHITECTURE_DASHBOARD.md # v2 pipeline design and decisions
-├── CLAUDE.md                 # AI agent guide
+│   ├── __init__.py              # Package marker — do not modify
+│   ├── flight_search.py         # Entry point
+│   ├── cli.py                   # Argument parsing and validation
+│   ├── config.py                # Constants and file paths
+│   ├── models.py                # Flight dataclass
+│   ├── utils.py                 # Airport data helpers
+│   ├── cache.py                 # Read/write cache — GCS first, local fallback
+│   ├── scraper.py               # Ryanair scraper
+│   ├── display.py               # Terminal table output
+│   ├── eu_airports.json         # Static IATA lookup table
+│   ├── ignored_airports.json    # Static IATA ignored during flight search
+│   ├── ambiguous_airports.json  # Auto-generated — ambiguous IATA codes discovered during scraping
+│   └── unknown_airports.json    # Auto-generated — unknown IATA codes discovered during scraping
+├── tests/                       # pytest — one file per src/ module
+├── ARCHITECTURE.md              # v1 system design and decisions
+├── ARCHITECTURE_DASHBOARD.md    # v2 pipeline design and decisions
+├── CLAUDE.md                    # AI agent guide
 ├── pyproject.toml
-└── uv.lock                   # Pinned dependency versions — do not edit manually
+└── uv.lock                      # Pinned dependency versions — do not edit manually
 ```
 
 ---
@@ -172,14 +169,17 @@ python src/flight_search.py Eindhoven Kingdom 2026-10-01...2026-10-30 60
 # Run tests
 uv run pytest
 
+# Run dbt tests — parse/compile only
+uv run ./pipeline/transform/dbt_local_test.sh
+
 # Lint
-uv run ruff check src/
+uv run ruff check src/ pipeline/ tests/
 
 # Format
-uv run ruff format src/
+uv run ruff format src/ pipeline/ tests/
 
 # Type-check
-uv run mypy src/
+uv run mypy src/ pipeline/ tests/
 ```
 
 ---
@@ -192,7 +192,7 @@ uv run mypy src/
 
 ---
 
-## Roadmap: v2 — Data Engineering Pipeline
+## Roadmap: v2 — Intelligence Dashboard
 
 v1 is the CLI tool documented above, and it **stays fully functional** — v2 is additive, not a replacement. The same repo grows a pipeline and dashboard layer on top of the existing scraper, chosen to run entirely on free tiers / free trial credit:
 
@@ -205,21 +205,21 @@ infrastructure/
 pipeline/
   ingestion/            # scheduled scrape → bronze (raw JSON in GCS)
   processing/           # PySpark jobs: bronze → silver (clean, dedupe, type)
-  transform/            # dbt Core project: silver → gold (star schema, tests, docs)
+  transform/            # dbt Core project: silver → gold (dashboard-driven marts, tests, docs)
 dashboards/
   looker/               # Looker Studio dashboard on top of gold tables, connected directly to BigQuery
 ```
 
-| Stage          | Tool                          | Free tier / trial                                                                                  |
-|----------------|-------------------------------|----------------------------------------------------------------------------------------------------|
-| Infrastructure | Terraform (`google` provider) | Provisions the GCS bucket + service account — free (IaC tooling, not a hosted resource)            |
-| Ingestion      | Existing scraper, scheduled   | Triggered by the Airflow DAG                                                                       |
-| Landing        | Google Cloud Storage          | 5 GB free tier                                                                                     |
-| Processing     | PySpark (local `local[*]`)    | Runs as a local Spark session, in its own container — no external cluster                          |
-| Warehouse      | BigQuery                      | 10 GB storage + 1 TB queries/month free                                                            |
-| Transform      | dbt Core                      | Open source, free                                                                                  |
-| Dashboard      | Looker Studio                 | Free; connects directly to BigQuery, sharing via public or restricted link                         |
-| Orchestration  | Apache Airflow                | Self-hosted via Docker Compose — free forever                                                      |
+| Stage          | Tool                          | Free tier / trial                                                                       |
+| -------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
+| Infrastructure | Terraform (`google` provider) | Provisions the GCS bucket + service account — free (IaC tooling, not a hosted resource) |
+| Ingestion      | Existing scraper, scheduled   | Triggered by the Airflow DAG                                                            |
+| Landing        | Google Cloud Storage          | 5 GB free tier                                                                          |
+| Processing     | PySpark (local `local[*]`)    | Runs as a local Spark session, in its own container — no external cluster               |
+| Warehouse      | BigQuery                      | 10 GB storage + 1 TB queries/month free                                                 |
+| Transform      | dbt Core                      | Open source, free                                                                       |
+| Dashboard      | Looker Studio                 | Free; connects directly to BigQuery, sharing via public or restricted link              |
+| Orchestration  | Apache Airflow                | Self-hosted via Docker Compose — free forever                                           |
 
 See [ARCHITECTURE_DASHBOARD.md](./ARCHITECTURE_DASHBOARD.md) for the full v2 design, component responsibilities, and the trade-offs behind each choice — kept as its own document, separate from `ARCHITECTURE.md` (v1), so the two systems stay easy to reason about independently.
 
